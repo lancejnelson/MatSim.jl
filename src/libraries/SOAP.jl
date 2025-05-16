@@ -34,11 +34,11 @@ function calculate(crystal,soap)
     counter = 1
      
     p_vector = zeros(sum(0:soap.n_max) * (soap.l_max + 1)*sum(0:crystal.order))
-#    for (iType, atoms)  in enumerate(crystal.atomicBasis), atom in atoms, (jType,atoms) in enumerate(crystal.atomicBasis), l = 0:soap.l_max,n=1:soap.n_max,np=1:soap.n_max
+#    for (iType, atoms)  in enumerate(crystal.positions), atom in atoms, (jType,atoms) in enumerate(crystal.positions), l = 0:soap.l_max,n=1:soap.n_max,np=1:soap.n_max
         for l = 0:soap.l_max,n=1:soap.n_max,np=n:soap.n_max
         for m  = -l:l
-            c = c_nlm(crystal,crystal.atomicBasis[1][1],1,n,l,m,soap)  # Calculate the coefficients for the spherical harmonics.
-            cp = c_nlm(crystal,crystal.atomicBasis[1][1],1,np,l,m,soap)  # Calculate the coefficients for the spherical harmonics.
+            c = c_nlm(crystal,crystal.positions[1][1],1,n,l,m,soap)  # Calculate the coefficients for the spherical harmonics.
+            cp = c_nlm(crystal,crystal.positions[1][1],1,np,l,m,soap)  # Calculate the coefficients for the spherical harmonics.
             #println(c, cp)
             p_vector[counter] += c * conj(cp)  # Add the coefficients to the p_vector.
     
@@ -90,7 +90,7 @@ function ρ(crystal,centerAtom,atomType,r,soap)
 #    loopBounds = SVector{3,Int64}(convert.(Int64,cld.(soap.r_cutoff ,[norm(x) for x in eachcol(crystal.latpar * crystal.lVecs)] )))    
  #   println("--------------------")
  #   println(r)
-    for neighborAtom in crystal.atomicBasis[atomType] # Loop over all atoms of type "atomType" in the crystal.
+    for neighborAtom in crystal.positions[atomType] # Loop over all atoms of type "atomType" in the crystal.
         
         # And these three inner loops are to find all of the periodic images of a neighboring atom.
         for i = -loopBounds[1]:loopBounds[1], j = -loopBounds[2]:loopBounds[2], k= -loopBounds[3]:loopBounds[3]
@@ -167,7 +167,7 @@ function bispectrum(crystal,cutoff)
     loopBounds = convert.(Int64,cld.(cutoff ,[norm(x) for x in eachcol(crystal.latpar * crystal.lVecs)] ))
     
     # The outer two loops are to loop over different centering atoms.
-    for (iCenter,centerAtomType) in enumerate(crystal.atomicBasis), centerAtom in centerAtomType 
+    for (iCenter,centerAtomType) in enumerate(crystal.positions), centerAtom in centerAtomType 
             centerAtomC = DirectToCartesian(crystal.latpar * crystal.lVecs,centerAtom)
             θ = atan(centerAtomC[2]/centerAtom[1])
             ϕ = atan(centerAtom[3]/ centerAtom)

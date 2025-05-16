@@ -3,27 +3,30 @@ module ase
 using StaticArrays
 using LinearAlgebra
 using enumeration
-using LennardJones
 using LinearAlgebra:Diagonal,diag,cross,UpperTriangular,norm,det
 
 mutable struct atoms
     title::String
     latpar::Float64
-    lVecs:: SMatrix{3,3,Float64,9}
-    nType:: Vector{Int64} #Number of each type of atom 
-    aType:: Vector{Int64} # Integers representing the type for each basis atom
-    nAtoms::Int64  # Total number of atoms in the unit cell
+    lVecs::SMatrix{3,3,Float64,9}
+#    nType:: Vector{Int64} #Number of each type of atom 
+#    aType:: Vector{Int64} # Integers representing the type for each basis atom
+#    nAtoms::Int64  # Total number of atoms in the unit cell
     coordSys::Vector{String} # 'D' for Direct or 'C' for cartesian
-    atomicBasis:: Vector{Vector{SVector{3,Float64}}}  # List of all the atomic basis vector separated by type 
+    positions:: Vector{SVector{3,Float64}}  # List of all the atomic basis vector separated by type 
+    velocities:: Vector{SVector{3,Float64}} # Velocities of the atoms
+    masses:: Vector{Float64}
+    atomTypes:: Vector{Int64} # Integers representing the type for each basis atom
     species:: Vector{String}  # Species of the atoms 
-    energyPerAtomFP:: Float64  # First principles total or peratom energy
-    fitEnergy:: Float64  # Energy that should be used in the fitting process
-    formationEnergyFP:: Float64  # First-principles formation energy 
-    formationEnergyModel:: Float64  # model formation energy
-    energyPerAtomModel:: Float64 # Model total or per atom energy
-    order::Int64 # binary, ternary, etc.
-    r6::Array{Float64,2}
-    r12::Array{Float64,2}
+    FP_total_energy:: Float64  # First principles total or peratom energy
+    model_energy:: Float64  # Energy that should be used in the fitting process
+#    formationEnergyFP:: Float64  # First-principles formation energy 
+#    formationEnergyModel:: Float64  # model formation energy
+#    energyPerAtomModel:: Float64 # Model total or per atom energy
+ #   order::Int64 # binary, ternary, etc.
+    lj_vec::Vector{Float64} # Vector of 1/r^6 and 1/r^12 values for each unique pair of atom types
+#    r6::Array{Float64,2}
+#    r12::Array{Float64,2}
 end
 
 
@@ -59,6 +62,61 @@ element_volume =Dict("H"=>37.2958,"He"=>32.1789,"Li"=>21.2543,"Be"=>8.49323,"B"=
 #config(filePath::String, strN::Int64,species::Vector{String};mink::Bool=true) = fromEnum(enum,enumStruct,species,mink=mink)
 
 
+function index_to_integer(iType,jType,order)
+    a = minimum([iType,jType])
+    b = maximum([iType,jType])
+    return (div((a-1) * (2 * order + 2 - a),2)) + (b - a) + 1
+end
+
+function integer_to_index(k::Int, n::Int)::Union{Tuple{Int,Int},Nothing}
+    # Check if k is valid
+    max_k = (n * (n + 1)) ÷ 2
+    if k < 1 || k > max_k
+        return nothing
+    end
+
+    # Find a such that k falls in the range for min(i,j) = a
+    for a in 1:n
+        # Pairs up to i' = a-1
+        s = ((a - 1) * (2 * n + 2 - a)) ÷ 2
+        # Number of pairs for i' = a (j' = a to n)
+        count = n - a + 1
+        # Check if k is in range [s + 1, s + count]
+        if s < k ≤ s + count
+            # Compute b
+            b = k - s + a - 1
+            return (a, b)
+        end
+    end
+
+    return nothing  # Should not reach here if k is valid
+end
+
+
+function nAtoms(atoms::atoms)
+    """
+    Returns the total number of atoms in the crystal.
+    """
+    return sum([length(a) for a in atoms.positions])
+end
+
+function nType(atoms::atoms)
+    """
+    Returns the number of different types of atoms in the crystal.
+    """
+    return [length(a) for a in atoms.positions]
+end
+
+function rescaleEnergy(energy,mean_energy, std_energy,offset)
+
+    return (energy - meanEnergy)/std_energy - offset
+
+end
+
+function undo_rescaleEnergy(energy,mean_energy, std_energy,offset)
+    return (energy + offset) * std_energy + mean_energy
+
+end
 """
     fromEnum(enum, enumStruct,species, [, energyPerAtomFP, modelEnergy, mink])
 
@@ -120,24 +178,26 @@ function fromEnum(file::String,strN::Int64,species:: Vector{String};mink=true)
         error("This isn't an error. I was just curious if the gIndex Vector is ever in an odd order.")
     end
     idx = sortperm(aType)  # Sort the type list, saving the indices
-    aBas = getPartitions(aBas[idx],nType) #Sort the atomic basis to match and then partition them by atom type.
-    aType = sort(aType)
+    #aBas = getPartitions(aBas[idx],nType) #Sort the atomic basis to match and then partition them by atom type.
+    aType = sort(aType) .+ 1
 
     # The next two lines are to add the displacements in using the arrows string from struct_enum.out. It's not tested
     # yet and I need to verify with Gus that I'm doing it right.  Just delete the next three lines to undo it if you find that
     # it's not right.
     arrows = [parse(Integer,enumStruct.arrows[i]+1) for i in gIndex]  #Get the list of arrows (as integers) in the right order.
-    displacements = getPartitions([cardinalDirections[i,:] for i in arrows],nType) # Partition to the same shape as the basis list so we can easily add them.
+    displacements = [cardinalDirections[i,:] for i in arrows] # Partition to the same shape as the basis list so we can easily add them.
     aBas .+= 0.1 * displacements
 
     cellVolume = abs(cross(sLV[:,1],sLV[:,2])' * sLV[:,3])
     
     nInteractions = Int(enum.k * (enum.k + 1)/2)
 
-    r6 = UpperTriangular(zeros(enum.k,enum.k))
-    r12 = UpperTriangular(zeros(enum.k,enum.k))
-
-    final = atoms(enum.title * " str #: " * string(enumStruct.strN),1.0,mink ? minkowski_reduce(sLV,1e-5) : sLV,nType,aType,nAtoms,["C"],aBas,["Unk" for i in nType],0,0,0,0,0,enum.k,r6,r12)
+#    r6 = UpperTriangular(zeros(enum.k,enum.k))
+#    r12 = UpperTriangular(zeros(enum.k,enum.k))
+    lj_vec = zeros(2*nInteractions)
+    masses = [0.0 for i in 1:nAtoms]
+    velocities = [SVector{3,Float64}(zeros(3)) for i in 1:nAtoms]
+    final = atoms(enum.title * " str #: " * string(enumStruct.strN),1.0,mink ? minkowski_reduce(sLV,1e-5) : sLV,["C"],aBas,velocities, masses,aType,["Unk" for i in nType],0.0,0.0,lj_vec)
     CartesianToDirect!(final)
     final.latpar = vegardsVolume(species,nType,cellVolume)
     return final
@@ -149,7 +209,7 @@ When you're all done, you'd like to partition that list by atomic type.  This is
 is the atom type and the second index is the number in that sublist.  This function simply performs that partitioning.
 
 """
-function getPartitions(atoms::Vector{Vector{Float64}},nAtoms::Vector{Int64})
+function getPartitions(atoms,nAtoms::Vector{Int64})#::Vector{Vector{Float64}}
     if length(atoms) != sum(nAtoms)
         println("Number of atoms doesn't match")
         return
@@ -172,9 +232,9 @@ with atomic positions at random locations.
 
 """
 # This function initializes only the cell parameters for an atoms object. All other type parameters are set to zero.
-function initialize_cell_shape(lPar::Float64, lVecs::Matrix{Float64})
-    
-    return atoms("No Atoms", lPar,lVecs,[0,0],[0,0],0,["C"],[[SVector{3,Float64}(zeros(3))]],["Unk"],0.0,0.0,0.0,0.0,0.0,2,zeros(2,2),zeros(2,2))
+function initialize_cell_shape(lPar::Float64, lVecs::SMatrix{3,3,Float64,9})
+
+    return atoms("No Atoms", lPar,lVecs,["C"],[SVector{3,Float64}(zeros(3))],[SVector{3,Float64}(zeros(3))],[1.0],[1],["Unk"],0.0,0.0,zeros(3))
 
 end
 
@@ -199,8 +259,8 @@ function set_cell!(atoms,new_cell; scale_atoms = false)
 
     if scale_atoms
         DirectToCartesian!(atoms)
-        for (iType,atomType) in enumerate(atoms.atomicBasis), (iAtom,atom) in enumerate(atomType)
-            atoms.atomicBasis[iType][iAtom] =  T * atoms.atomicBasis[iType][iAtom]
+        for (iType,atomType) in enumerate(atoms.positions), (iAtom,atom) in enumerate(atomType)
+            atoms.positions[iType][iAtom] =  T * atoms.positions[iType][iAtom]
         end
     end
     set_coord_sys!(atoms,currentCoordSys)
@@ -226,27 +286,44 @@ function min_aspect_ratio(cell)
 
 end
 
-# This function will take an already created atoms object and randomly place atoms in the cell.
-function set_atoms_random!(atoms::atoms,nAtoms::Vector{Int64},cutoff::Float64,species::Vector{String})
-    newAtoms =  initialize_with_random_positions(atoms.latpar,atoms.lVecs,nAtoms,cutoff,species)
-    atoms.nType = newAtoms.nType
-    atoms.aType = newAtoms.aType
-    atoms.nAtoms = newAtoms.nAtoms
-    atoms.coordSys = newAtoms.coordSys
-    atoms.atomicBasis = newAtoms.atomicBasis
-    atoms.species = newAtoms.species
-    atoms.order = newAtoms.order
-    atoms.title = join(species,"-")
+
+function get_concentrations(atoms::atoms)
+    """
+    Returns the concentrations of each atom type in the crystal.
+    """
+    order = length(unique(atoms.atomTypes))
+    numAtoms = nAtoms(atoms)
+    concentrations = [0.0 for i=1:order]
+    for i=1:order
+        concentrations[i] = length(atoms.positions[i])/numAtoms
+    end
+    return concentrations
 end
 
-# This routine will initialize an atoms object so that the atoms are randomly placed in the cell.
-function initialize_with_random_positions(lPar:: Float64, lVecs,nAtoms::Vector{Int64},cutoff::Float64,species::Vector{String})
 
+# This function will take an already created atoms object and randomly place atoms in the cell.
+#function set_atoms_random!(atoms::atoms,nAtoms::Vector{Int64},cutoff::Float64,species::Vector{String})
+#    initialize_with_random_positions!(atoms,nAtoms,cutoff,species)
+    #atoms.nType = newAtoms.nType
+    #atoms.atomTypes = newAtoms.aType
+    #atoms.nAtoms = newAtoms.nAtoms
+    #atoms.coordSys = newAtoms.coordSys
+    #atoms.positions = newAtoms.positions
+    #atoms.species = newAtoms.species
+    #atoms.order = newAtoms.order
+    #atoms.
+    #atoms.title = join(species,"-")
+#end
+
+# This routine will initialize an atoms object so that the atoms are randomly placed in the cell.
+function set_atoms_random!(atoms,nAtoms::Vector{Int64},cutoff::Float64,species::Vector{String})
+
+    lPar = atoms.latpar
+    lVecs = atoms.lVecs
     totalAtoms = sum(nAtoms)
     order = length(nAtoms)
-    aType = hcat([ [n for i=1:nAtoms[n]]' for n=1:length(nAtoms)]...)'
-
-    atom_locations = [zeros(Float64,3) for i=1:totalAtoms]  
+    aTypes = hcat([ [n for i=1:nAtoms[n]]' for n=1:length(nAtoms)]...)'
+    positions = [zeros(Float64,3) for i=1:totalAtoms]  
 
     nTotal = 0
     counter = 0
@@ -255,13 +332,13 @@ function initialize_with_random_positions(lPar:: Float64, lVecs,nAtoms::Vector{I
         if counter > 5000
             println("Having trouble putting that many atoms into this simulation cell.")
             println("So far I've only place $nTotal atoms." )
-            return
+            error("Stopping")
         end
         newAtomCart = lPar * lVecs * rand(3)
 
         newOK = true
         for i=1:nTotal
-            if norm(newAtomCart - atom_locations[i]) < cutoff
+            if norm(newAtomCart - positions[i]) < cutoff
                 newOK = false
             end
             if !newOK
@@ -270,14 +347,26 @@ function initialize_with_random_positions(lPar:: Float64, lVecs,nAtoms::Vector{I
         end
         if newOK
             nTotal += 1
-            atom_locations[nTotal] .= newAtomCart
+            positions[nTotal] .= newAtomCart
         end
     end
-    atomicBasis = getPartitions(atom_locations,nAtoms)
+    #positions = getPartitions(atom_locations,nAtoms)
     k = length(species)
-    r6 = UpperTriangular(zeros(k,k))
-    r12 = UpperTriangular(zeros(k,k))
-    return atoms("Random Locations",lPar,lVecs,nAtoms,aType,totalAtoms,["C"], atomicBasis,species,0.0,0.0,0.0,0.0,0.0,order,r6,r12)
+#    r6 = UpperTriangular(zeros(k,k))
+#    r12 = UpperTriangular(zeros(k,k))
+    lj_vec = zeros(2*Int(k*(k+1)/2))
+    #println("lj_vec: ",lj_vec)
+    masses = [0.0 for i in 1:length(positions)]
+    velocities = [SVector{3,Float64}(zeros(3)) for i in 1:length(positions)]
+    atoms.positions = positions
+    atoms.velocities = velocities
+    atoms.masses = masses
+    atoms.species = species
+    atoms.coordSys = ["C"]
+    atoms.lj_vec = lj_vec
+    atoms.title = "Random Locations"
+    atoms.atomTypes = aTypes
+    #    return atoms("Random Locations",lPar,lVecs,["C"], positions,velocities,masses,species,0.0,0.0,lj_vec)
 end
 
 """
@@ -308,14 +397,14 @@ function fromPOSCAR(filePath::String,species::Vector{String};overwriteLatPar = f
     coordSys = [pos[counter + 1]]
     latpar = parse(Float64,pos[2])
     aType = hcat([ [n for i=1:nBasis[n]]' for n=1:length(nBasis)]...)'
-    allBasis = [parse.(Float64,split(x)[1:3]) for x in pos[(counter + 2):(counter + 1 +sum(nBasis))]] # Read all of the basis vectors SVector{3,Float64}(
+    positions = [parse.(Float64,split(x)[1:3]) for x in pos[(counter + 2):(counter + 1 +sum(nBasis))]] # Read all of the basis vectors SVector{3,Float64}(
     allTypes = try
         [split(x)[end] for x in pos[(counter + 2):end]]
     catch e
         println("No atom types listed in the POSCAR")
         ["?" for x in pos[(counter + 2):end]]
     end
-    atomicBasis = getPartitions(allBasis,nBasis)
+#    positions = getPartitions(allBasis,nBasis)
     order = length(nBasis)
     nAtoms = sum(nBasis)
 
@@ -332,11 +421,14 @@ function fromPOSCAR(filePath::String,species::Vector{String};overwriteLatPar = f
 #        println("Keeping lattice parameter in file")
     end
     
-    r6 = UpperTriangular(zeros(order,order))
-    r12 = UpperTriangular(zeros(order,order))
+#    r6 = UpperTriangular(zeros(order,order))
+#    r12 = UpperTriangular(zeros(order,order))
+    lj_vec = zeros(2*nInteractions)
 #    fEnth = formationEnergy(pureEnergies,nBasis ./ nAtoms,energyPerAtomFP)
+    masses = [0.0 for i in 1:nAtoms]
+    velocities = [SVector{3,Float64}(zeros(3)) for i in 1:nAtoms]
 
-    return atoms(title, latpar,lVecs,nBasis,aType,nAtoms,coordSys,atomicBasis,species,0.0,0.0,0.0,0.0,0.0,order,r6,r12)  # Create new crystal object.
+    return atoms(title, latpar,lVecs,coordSys,positions,velocities,masses,aType,species,0.0,0.0,lj_vec)  # Create new crystal object.
 
 end
 
@@ -363,14 +455,14 @@ function fromPOSCAR(lines::Vector{String},species::Vector{String};overwriteLatPa
     coordSys = [lines[counter + 1]]
     latpar = parse(Float64,lines[2])
     aType = hcat([ [n for i=1:nBasis[n]]' for n=1:length(nBasis)]...)'
-    allBasis = [parse.(Float64,split(x)[1:3]) for x in lines[(counter + 2):(counter + 1)+sum(nBasis)]] # Read all of the basis vectors
+    positions = [parse.(Float64,split(x)[1:3]) for x in lines[(counter + 2):(counter + 1)+sum(nBasis)]] # Read all of the basis vectors
     allTypes = try
         [split(x)[end] for x in lines[(counter + 2):end]]
     catch e
         println("No atom types listed in the POSCAR")
         ["?" for x in pos[(counter + 2):end]]
     end
-    atomicBasis = getPartitions(allBasis,nBasis)
+#    positions = getPartitions(allBasis,nBasis)
     order = length(nBasis)
     nAtoms = sum(nBasis)
 
@@ -385,37 +477,44 @@ function fromPOSCAR(lines::Vector{String},species::Vector{String};overwriteLatPa
     else
 #        println("Keeping lattice parameter in file")
     end
-    r6 = UpperTriangular(zeros(order,order))
-    r12 = UpperTriangular(zeros(order,order))
+#    r6 = UpperTriangular(zeros(order,order))
+#    r12 = UpperTriangular(zeros(order,order))
+    lj_vec = zeros(2*nInteractions)
+
+    masses = [0.0 for i in 1:nAtoms]
+    velocities = [SVector{3,Float64}(zeros(3)) for i in 1:nAtoms]
 #    fEnth = formationEnergy(pureEnergies,nBasis ./ nAtoms,energyPerAtomFP)
-    return atoms(title, latpar,lVecs,nBasis,aType,nAtoms,coordSys,atomicBasis,species,0.0,0.0,0.0,0.0,0.0,order,r6,r12)  # Create new crystal object.
+    return atoms(title, latpar,lVecs,coordSys,positions,velocities,masses,aType,species,0.0,0.0,lj_vec)  # Create new crystal object.
 
 end
 
-#function mapIntoCell(crystal::Crystal,atom::Vector{Int64})
-#    if crystal.coordSys[1] == "C"
-#        atom = CartesianToDirect(crystal,atom)
-#    end
-#    # Convert to Direct.
-#    # Map back into cell.
-#    # Go back to cartesian.
-#    # Python code... Needs translated to Julia
-#    new_point = []
-#    for i in atom
-#        if i < 0.0 or i > 1.0
-#         #   print(i,' i')
-#         #   print(floor(i),' floor')
-#         #   print(i - floor(i),' result')
-#            append!(new_point,i - floor(i))
-#        elseif isapprox(i,1.0,atol = 1e-4)#  i == 1.0
-#            append!(new_point,0.0)
-#        else
-#            append!(new_point,i)
-#        end
-#    end
-#
-#    return new_point
-#end
+function mapIntoCell!(atoms::atoms)
+    CartesianToDirect!(atoms)
+
+    # Is there a better way to do this than using the new_point variable and then
+    # turning it into an SVector at the end. I can't modify the SVectors in place
+    new_point = [0.0,0.0,0.0]
+    for (iAtom,atom) in enumerate(atoms.positions)
+        #for (iAtom,atom) in enumerate(atomType)
+        for (iCoord,coord) in enumerate(atom)
+            if coord < 0.0 || coord > 1.0
+            #   print(i,' i')
+            #   print(floor(i),' floor')
+            #   print(i - floor(i),' result')
+                new_point[iCoord] = coord - floor(coord)
+                #atoms.positions[iType][iAtom][iCoord] = coord - floor(coord)
+            elseif isapprox(coord,1.0,atol = 1e-4)#  i == 1.0
+                new_point[iCoord] = 0.0
+               # atoms.positions[iType][iAtom][iCoord] = 0.0
+            else
+                new_point[iCoord] = coord
+            end
+        end
+        atoms.positions[iAtom] = SVector{3,Float64}(new_point)
+    end
+
+    DirectToCartesian!(atoms)
+end
 
 
 """
@@ -438,23 +537,27 @@ function fccPures(types)
     aType = [1, 0]
     nAtoms = 1
     coordSys = ["D"]
-    atomicBasis = [[@SVector [0., 0 , 0]],[]]
+    positions = [@SVector [0., 0 , 0]]
     species = sort!(types,rev =true)
     order = length(types)
-    r6 = UpperTriangular(zeros(order,order))
-    r12 = UpperTriangular(zeros(order,order))
+#    r6 = UpperTriangular(zeros(order,order))
+#    r12 = UpperTriangular(zeros(order,order))
+    nInteractions = Int(order * (order + 1)/2)
+    lj_vec = zeros(2 * nInteractions)
     title = join(types, "-")
     println(title)
-    return atoms(title,lP[1],lVecs,nType,aType,nAtoms,coordSys,atomicBasis,species,0,0,0,0,0,order,r6,r12),
-           atoms(title,lP[2],lVecs,reverse(nType),reverse(aType),nAtoms,coordSys,atomicBasis,species,0,0,0,0,0,order,r6,r12) 
+    masses = [0.0 for i in 1:nAtoms]
+    velocities = [SVector{3,Float64}(zeros(3)) for i in 1:nAtoms]
+    return atoms(title,lP[1],lVecs,coordSys,positions,velocities,masses,aType,species,0.0,0.0,lj_vec),
+           atoms(title,lP[2],lVecs,coordSys,positions,velocities,masses,aType,species,0.0,0.0,lj_vec) 
 
 end
 
 function formationEnergy(mixEnergyPerAtom,pureEnergiesPerAtom,concentrations)
-   # println("Calculating formation energy")
-   # println(mixEnergyPerAtom)
-   # println(pureEnergiesPerAtom)
-   # println(concentrations)
+   #println("Calculating formation energy")
+   #println(mixEnergyPerAtom)
+   #println(pureEnergiesPerAtom)
+   #println(concentrations)
     return mixEnergyPerAtom - sum(concentrations .* pureEnergiesPerAtom)
 
 end
@@ -483,8 +586,8 @@ function DirectToCartesian!(atoms::atoms)
 #    println(atoms.coordSys[1])
     if lowercase(atoms.coordSys[1])[1] == 'd'
         #println("Converting to cartesian")
-        atoms.atomicBasis .= [[atoms.latpar * atoms.lVecs * i for i in j] for j in atoms.atomicBasis ]
-        #println(typeof(crystal.atomicBasis[1][1]))
+        atoms.positions .= [atoms.latpar * atoms.lVecs * i for i in atoms.positions ]
+        #println(typeof(crystal.positions[1][1]))
 
         atoms.coordSys[1] = "Cart"
  #   else
@@ -499,8 +602,8 @@ end
 function CartesianToDirect!(atoms::atoms)
     if lowercase(atoms.coordSys[1])[1] == 'c'
         #println("Converting to direct")
-        atoms.atomicBasis .= [[ round.( ( inv(atoms.latpar * atoms.lVecs) * i) .% 1,sigdigits = 8) for i in j]  for j in atoms.atomicBasis ]
-        #println(typeof(atoms.atomicBasis[1][1]))
+        atoms.positions .= [ round.( ( inv(atoms.latpar * atoms.lVecs) * i) .% 1,sigdigits = 8) for i in atoms.positions ]
+        #println(typeof(atoms.positions[1][1]))
         atoms.coordSys[1] = "Direct"
     #else
        # println("Already in Cartesian coordinates")
@@ -643,25 +746,28 @@ end
 
 
 
-function singleAtomForce(model,atoms::atoms,centerAtom::SVector{2,Int64}, loopBounds::SVector{3,Int64})
+function singleAtomForce(model,atoms::atoms,centerAtom::Int64, loopBounds::SVector{3,Int64})
     #ljvals = zeros(3,2)  #Specific to binary material.  Needs generalized to k-nary case.
     CartesianToDirect!(atoms)
 
     addVec = zeros(3)
     indices = zeros(2)
     fVec = SVector(0,0,0)
-    for (iNeighbor,aType) in enumerate(atoms.atomicBasis), neighboratom in aType  #Loop over the different atom types.
+    centerType = atoms.atomTypes[centerAtom]
+    for (iAtom,neighboratom) in enumerate(atoms.positions)  #Loop over the different atom types.
+        neighborType = atoms.atomTypes[iAtom]
             # And these three inner loops are to find all of the periodic images of a neighboring atom.
         for i = -loopBounds[1]:loopBounds[1], j = -loopBounds[2]:loopBounds[2], k= -loopBounds[3]:loopBounds[3]
             addVec .= (i,j,k) 
             newAtom = neighboratom + addVec  #Periodic image of this atom
             newCart = DirectToCartesian(atoms.latpar * atoms.lVecs,newAtom)  # Convert to cartesian coordinate system
-            r = newCart - DirectToCartesian(atoms.latpar * atoms.lVecs,atoms.atomicBasis[centerAtom[1]][centerAtom[2]]) 
+            r = newCart - DirectToCartesian(atoms.latpar * atoms.lVecs,atoms.positions[centerAtom]) 
             if norm(r) < model.cutoff && !isapprox(norm(r),0,atol = 1e-3)
                 println("Adding to force")
-                indices = iNeighbor < centerAtom[1] ? @SVector[iNeighbor,centerAtom[1]] : @SVector[centerAtom[1],iNeighbor]
-                fVec -=    12. * 4. * model.ϵ[indices[1],indices[2]] * model.σ[indices[1],indices[2]]^12/norm(r)^13 * r/norm(r)
-                fVec +=    6. * 4. * model.ϵ[indices[1],indices[2]] * model.σ[indices[1],indices[2]]^6/norm(r)^7 * r/norm(r)
+#                indices = iNeighbor < centerAtom[1] ? @SVector[iNeighbor,centerAtom] : @SVector[centerAtom,iNeighbor]
+                index = index_to_integer(centerType,neighborType,atoms.order)
+                fVec -=    12. * 4. * model.ϵ[index] * model.σ[index]^12/norm(r)^13 * r/norm(r)
+                fVec +=    6. * 4. * model.ϵ[index] * model.σ[index]^6/norm(r)^7 * r/norm(r)
             end
         end
     end
@@ -670,41 +776,19 @@ end
 
 
 function singleAtomEnergy(model,atoms::atoms,centerAtom::SVector{3,Float64}, centerType:: Integer, loopBounds::SVector{3,Int64})
-    #ljvals = zeros(3,2)  #Specific to binary material.  Needs generalized to n-ary case.
-    totalEnergy = 0
-    addVec = zeros(3)
-    indices = zeros(2)
-    for (iNeighbor,aType) in enumerate(atoms.atomicBasis), neighboratom in aType  #Loop over the different atom types.
-            # And these three inner loops are to find all of the periodic images of a neighboring atom.
-        for i = -loopBounds[1]:loopBounds[1], j = -loopBounds[2]:loopBounds[2], k= -loopBounds[3]:loopBounds[3]
-            addVec .= (i,j,k) 
-#            addVec[2] = Float64(j)
-#            addVec[3] = Float64(k)
-#            addVec[1],addVec[2],addVec[3] .= Float64(i), Float64(j), Float64(k)
-            newAtom = neighboratom + addVec
-            newCart = DirectToCartesian(atoms.latpar * atoms.lVecs,newAtom)
-            r = norm(newCart - centerAtom) 
-            if r < model.cutoff && !isapprox(r,0,atol = 1e-3)
-                #If the neighbor atom is inside the unit cell, then its going to be
-                # double counted at some point when we center on the other atom.  
-                # So we count it as half each time.
-                indices = iNeighbor < centerType ? @SVector[iNeighbor,centerType] : @SVector[centerType,iNeighbor]
-                if all(isapprox.(addVec,0.0) ) 
-                    totalEnergy -=  4. * model.ϵ[indices[1],indices[2]] * 1/2 * model.σ[indices[1],indices[2]]^6/r^6
-                    totalEnergy +=  4. * model.ϵ[indices[1],indices[2]] * 1/2 * model.σ[indices[1],indices[2]]^12/r^12
-                else 
-                    totalEnergy -= 4. * model.ϵ[indices[1],indices[2]] * model.σ[indices[1],indices[2]]^6/r^6
-                    totalEnergy += 4. * model.ϵ[indices[1],indices[2]] * model.σ[indices[1],indices[2]]^12/r^12
-                end
-            end
-        end
-    end
-    return totalEnergy
+    singleAtomDistances!(atoms,model.cutoff,centerAtom,centerType,loopBounds)
+    coeffs = vcat(-1.0 * model.ϵ .* model.σ.^6, model.ϵ .* model.σ.^12)
+    totalEnergy = atoms.lj_vec' * coeffs
+    
+    return (totalEnergy + model.offset) * model.stdEnergy + model.meanEnergy
 end
 
 function singleAtomDistances!(atoms::atoms,cutoff,centerAtom::SVector{3,Float64}, centerType:: Integer, loopBounds::SVector{3,Int64})
     #    ljvals = zeros(3,2)  #Specific to binary material.  Needs generalized to n-ary case.
-    for (iNeighbor,aType) in enumerate(atoms.atomicBasis), neighboratom in aType  #Loop over the different atom types.
+    order = length(unique(atoms.atomTypes))
+    nInteractionTypes = sum(1:order)
+    for (iNeighbor,neighboratom) in enumerate(atoms.positions)  #Loop over the different atom types.
+        neighborType = atoms.atomTypes[iNeighbor]
             # And these three inner loops are to find all of the periodic images of a neighboring atom.
         for i = -loopBounds[1]:loopBounds[1], j = -loopBounds[2]:loopBounds[2], k= -loopBounds[3]:loopBounds[3]
             newAtom = neighboratom + @SVector[i,j,k]
@@ -719,103 +803,148 @@ function singleAtomDistances!(atoms::atoms,cutoff,centerAtom::SVector{3,Float64}
                 # to interaction between b and a.  So I sort the indices here so that the bottom
                 # triangle of the matrix never gets updated, only the upper right.
                 #indices[1],indices[2] = iNeighbor,centerType
-                
-                indices = iNeighbor < centerType ? @SVector[iNeighbor,centerType] : @SVector[centerType,iNeighbor]
-                if all(@SVector[i,j,k] .== 0 ) 
-                    atoms.r6[indices[1],indices[2]] +=  4. * 1.0/2.0 * 1.0/r^6
-                    atoms.r12[indices[1],indices[2]] +=  4. * 1.0/2.0 * 1.0/r^12
-                else 
-                    atoms.r6[indices[1],indices[2]] += 4. * 1.0/r^6
-                    atoms.r12[indices[1],indices[2]] += 4. * 1.0/r^12
+                #println(atoms.atomTypes)
+                index = index_to_integer(centerType,neighborType,order)
+                #println(centerType,neighborType,order,index)
+                if all(@SVector[i,j,k] .== 0 )
+                    atoms.lj_vec[index] +=  4.0 * 1.0/2.0 * 1.0/r^6
+                    atoms.lj_vec[index + nInteractionTypes] +=   4.0 * 1.0/2.0 * 1.0/r^12
+                else
+                    atoms.lj_vec[index] +=  4.0 * 1.0/r^6
+                    atoms.lj_vec[index + nInteractionTypes] +=  4.0 *  1.0/r^12
                 end
+            #    indices = iNeighbor < centerType ? @SVector[iNeighbor,centerType] : @SVector[centerType,iNeighbor]
+            #    if all(@SVector[i,j,k] .== 0 ) 
+            #        atoms.r6[indices[1],indices[2]] +=  4. * 1.0/2.0 * 1.0/r^6
+            #        atoms.r12[indices[1],indices[2]] +=  4. * 1.0/2.0 * 1.0/r^12
+            #    else 
+            #        atoms.r6[indices[1],indices[2]] += 4. * 1.0/r^6
+            #        atoms.r12[indices[1],indices[2]] += 4. * 1.0/r^12
+            #    end
             end
         end
     end
     #return distMat
 end
 
+function set_random_unit_velocities!(atoms,nTypes, KE_max)
+    nAtoms = length(atoms.positions)
+#    masses = vcat(atoms.masses...)  # Flatten the masses vector.
+    # Get a set of random unit vectors in 3D space.
+    unit_vecs = [SVector{3,Float64}(randn(3)) for i=1:nAtoms]
+    for i=1:nAtoms
+        unit_vecs[i] /= norm(unit_vecs[i])
+    end
+
+    # In 3D the magnitude of the velocity should follow a r^1/3N distribution
+    # where N is the number of atoms.  Generate a magnitude from this distribution.
+    mag = rand()^(1/(3 * length(nAtoms)))
+    velocities = similar(unit_vecs)
+    for iAtom=1:nAtoms
+        scaledMag = mag * sqrt(2 * KE_max / atoms.masses[iAtom])
+        velocities[iAtom] = scaledMag * unit_vecs[iAtom]
+    end
+    atoms.velocities .= velocities
+#    scaledMag = mag * sqrt.([2 * KE_max ./ x for x in atoms.masses])
+#    velocities = [scaledMag[x][y] .* unit_vecs[x][y] for x in 1:length(types) for y in 1:length(x)]# * unit_vecs
+#    return velocities
+end
+
+
+function set_masses(atoms::atoms,masses::Vector{Vector{Float64}})
+    for i=1:length(atoms.positions)
+        atoms.masses[i] = masses[i]
+    end
+end
+
+function set_masses(atoms::atoms,masses::Float64)
+    for i=1:length(atoms.positions)
+        atoms.masses[i] = masses
+    end
+end
 function precalc_LJ_distances!(atoms::atoms,cutoff)
     CartesianToDirect!(atoms)
-#    r6 = zeros(atoms.order,atoms.order)
-#    r12 = zeros(atoms.order,atoms.order)
     
     eVals = eigvals(transpose(atoms.latpar .* atoms.lVecs) * (atoms.latpar .* atoms.lVecs))
     maxN = cutoff/sqrt(minimum(eVals))
     
     loopBounds = SVector{3,Int64}(convert.(Int64,cld.(cutoff ,SVector{3,Float64}(norm(x) for x in eachcol(atoms.latpar * atoms.lVecs)) )))
     # The outer two loops are to loop over different centering atoms.
-    for (iCenter,centerAtomType) in enumerate(atoms.atomicBasis), centerAtom in centerAtomType 
+    for (iCenter,centerAtom) in enumerate(atoms.positions)
+        centerAtomType = atoms.atomTypes[iCenter]
         centerAtomC = DirectToCartesian(atoms.latpar * atoms.lVecs,centerAtom)
-        singleAtomDistances!(atoms,cutoff,centerAtomC,iCenter,loopBounds)    # Find the contribution to the LJ energy for this centering atom.
+        singleAtomDistances!(atoms,cutoff,centerAtomC,centerAtomType,loopBounds)    # Find the contribution to the LJ energy for this centering atom.
         
     end
 end
 
-function totalEnergy(atoms::atoms,model)
-    if !all(atoms.r6 .== 0.0)
-#        println("Doing it the easy way")
-        totalEnergy = 0.0
-        for i in eachindex(model.ϵ)
-            totalEnergy += -model.ϵ[i] * model.σ[i]^6 * atoms.r6[i] + model.ϵ[i] * model.σ[i]^12 * atoms.r12[i]
-        end
-    else
- #       println("Doing it the hard way")
-        CartesianToDirect!(atoms)
-        totalEnergy = 0.0 
-        loopBounds = SVector{3,Int64}(convert.(Int64,cld.(model.cutoff ,[norm(x) for x in eachcol(atoms.latpar * atoms.lVecs)] )))
-        # The outer two loops are to loop over different centering atoms.
-        for (iCenter,centerAtomType) in enumerate(atoms.atomicBasis), centerAtom in centerAtomType 
-            centerAtomC = DirectToCartesian(atoms.latpar * atoms.lVecs,centerAtom)
-            totalEnergy += singleAtomEnergy(model,atoms,centerAtomC,iCenter,loopBounds)    # Find the contribution to the LJ energy for this centering atom.
-        end
+function totalEnergy(atoms::atoms,model;force_recalc = false)
+    if all(atoms.lj_vec .== 0.0)
+ #       println("Calculating Distances")
+        precalc_LJ_distances!(atoms,model.cutoff)
+    elseif force_recalc
+        atoms.lj_vec .= 0.0
+        precalc_LJ_distances!(atoms,model.cutoff)
     end
 
-    # Undo the rescaling of the energy.
+#    println("vecs",atoms.lj_vec)
+    coeffs = vcat(-1.0 * model.ϵ .* model.σ.^6, model.ϵ .* model.σ.^12)
+    #println(coeffs)
+    #println(atoms.lj_vec)
+    totalEnergy = atoms.lj_vec' * coeffs
+
     return (totalEnergy + model.offset) * model.stdEnergy + model.meanEnergy
 end
 
     
 
 
-function gradientForce(model,atoms,atom,loopBounds; eps = 1e-5)
+function gradientForce(model,atoms,atom,loopBounds; eps = 1e-3)
     fVec = zeros(3)
     # Find x-component of force
 #    println("before")
-#    display(atoms.atomicBasis[atom[1]][atom[2]])
+#    display(atoms.positions[atom[1]][atom[2]])
     DirectToCartesian!(atoms)
-    atoms.atomicBasis[atom[1]][atom[2]] -= SVector{3,Float64}(eps,0,0)
-    energyOne = totalEnergy(atoms,model)
+    atoms.positions[atom] -= SVector{3,Float64}(eps,0,0)
+    energyOne = eval_energy(atoms,model,force_recalc = true)
+#    println("energyOne", energyOne)
     DirectToCartesian!(atoms)
-    atoms.atomicBasis[atom[1]][atom[2]] += SVector{3,Float64}(2 * eps,0,0)
-    energyTwo = totalEnergy(atoms,model)
+    atoms.positions[atom] += SVector{3,Float64}(2 * eps,0,0)
+    energyTwo = eval_energy(atoms,model,force_recalc = true)
+#    println("energyTwo", energyTwo)
     DirectToCartesian!(atoms)
-    atoms.atomicBasis[atom[1]][atom[2]] -= SVector{3,Float64}(eps,0,0)  # Put it back where it was.
+    atoms.positions[atom] -= SVector{3,Float64}(eps,0,0)  # Put it back where it was.
     fVec[1] = -(energyTwo - energyOne)/(2 * eps)
 #    println("energies after 1")
 #    display(energyTwo)
 #    display(energyOne)
     # Find y-component of force
-    atoms.atomicBasis[atom[1]][atom[2]] -= SVector{3,Float64}(0,eps,0)
-    energyOne = totalEnergy(atoms,model)
+    atoms.positions[atom] -= SVector{3,Float64}(0,eps,0)
+    energyOne = eval_energy(atoms,model,force_recalc = true)
+#    println("energyOne", energyOne)
     DirectToCartesian!(atoms)
-    atoms.atomicBasis[atom[1]][atom[2]] += SVector{3,Float64}(0,2 * eps,0)
-    energyTwo = totalEnergy(atoms,model)
+    atoms.positions[atom] += SVector{3,Float64}(0,2 * eps,0)
+    energyTwo = eval_energy(atoms,model,force_recalc = true)
+#    println("energyTwo", energyTwo)
     DirectToCartesian!(atoms)
-    atoms.atomicBasis[atom[1]][atom[2]] -= SVector{3,Float64}(0,eps,0)  # Put it back where it was.
+    atoms.positions[atom] -= SVector{3,Float64}(0,eps,0)  # Put it back where it was.
     fVec[2] = -(energyTwo - energyOne)/(2 * eps)
 
  #   println("energies after 2")
  #   display(energyTwo)
  #   display(energyOne)
     # Find z-component of force
-    atoms.atomicBasis[atom[1]][atom[2]] -= SVector{3,Float64}(0,0,eps)  # Move atom downward
-    energyOne = totalEnergy(atoms,model)        # Calculate energy
+    atoms.positions[atom] -= SVector{3,Float64}(0,0,eps)  # Move atom downward
+    energyOne = eval_energy(atoms,model,force_recalc = true)        # Calculate energy
+#    println("energyOne", energyOne)
     DirectToCartesian!(atoms)
-    atoms.atomicBasis[atom[1]][atom[2]] += SVector{3,Float64}(0,0,2 * eps)  # Move atom upward
-    energyTwo = totalEnergy(atoms,model)           # Calculate energy
+    atoms.positions[atom] += SVector{3,Float64}(0,0,2 * eps)  # Move atom upward
+    energyTwo = eval_energy(atoms,model,force_recalc = true)           # Calculate energy
+#    println("energyTwo", energyTwo)
     DirectToCartesian!(atoms)
-    atoms.atomicBasis[atom[1]][atom[2]] -= SVector{3,Float64}(0,0,eps)  # Put it back where it was.
+    atoms.positions[atom] -= SVector{3,Float64}(0,0,eps)  # Put it back where it was.
     fVec[3] = -(energyTwo - energyOne)/(2 * eps)      # Calculate component of gradient
+    DirectToCartesian!(atoms)
  #   println("energies after 3")
  #   display(energyTwo)
  #   display(energyOne)
@@ -824,10 +953,137 @@ function gradientForce(model,atoms,atom,loopBounds; eps = 1e-5)
 end
 
 
+function get_random_displacements(n_vecs)
+    displacements = [zeros(SVector{3}) for i = 1:n_vecs]
+    for j = 1:length(n_vecs)
+        randVel = convert(SVector{3},(  2 * rand(3) .- 1.0))
+        displacements[j] = 0.2*randVel/norm(randVel)
+    end
+    return displacements
 
-function eval_energy(atoms,model)
+
+end
+
+# Galilean Monte Carlo
+function do_GMC!(config::atoms,nWalk::Int64,model,E_max)
+    initialConfig = deepcopy(config)
+    oldEnergy = ase.eval_energy(config,model)
+    ase.DirectToCartesian!(config)
+    println("energy at start")
+    println(oldEnergy)
+    println(config.coordSys)
+
+    displacements = get_random_displacements(length(config.positions))
+    forces = [zeros(SVector{3}) for x = 1:length(config.positions)]
+    #display(velocities)
+    n_reflect = 0
+    n_reverse = 0
+    n_accept = 0
+    for iWalk = 1:nWalk
+        println("iWalk: ", iWalk)
+        last_good_positions = deepcopy(config.positions)
+        last_good_displacements = deepcopy(displacements)
+        config.positions .+= displacements  # Propogate the postions forward
+        ase.mapIntoCell!(config)
+        if any([isnan(y) for x in config.positions for y in x])
+            println(displacements)
+            error("Found NaNs")
+        end
+        newEnergy = ase.eval_energy(config,model)  # Calculate the new energies
+        ase.DirectToCartesian!(config)
+        if newEnergy > E_max  # If we went uphill, we need to try and re-direct the displacements in the direction of the net force.
+            n_reflect += 1
+            for (iAtom,atom) in enumerate(config.positions)  #Loop over the different atom types.
+                forces[iAtom] = ase.gradientForce(model,config,iAtom,@SVector[2,2,2])
+            end
+            # Sometimes the force vectors are zero, and therefore the normalization fails (divide by zero)
+            # If the magnitude of the force is zero, then we don't need to do anything.
+            nHat = [norm(x) > 0.0 ? x / norm(x) : x for x in forces]
+            #nHat = [x ./ norm.(x) for x in forces]
+            for i = 1:length(config.positions)
+                @inbounds displacements[i] -= (2 * (displacements[i]' * nHat[i])) * nHat[i]
+            end
+            if any([isnan(z) for x in displacements for y in x for z in y])
+                println(displacements)
+                println(nHat)
+                println(forces)
+                error("Found NaNs in displacement 1")
+            end
+            config.positions += displacements
+            ase.mapIntoCell!(config)
+            energy_after_deflection = ase.eval_energy(config,model)
+            if energy_after_deflection > E_max
+                config.positions = last_good_positions
+                displacements = -1.0 * last_good_displacements
+                if any([isnan(z) for x in displacements for y in x for z in y])
+                    println(displacements)
+                    error("Found NaNs in displacement 2")
+                end
+                n_reflect -= 1
+                n_reverse += 1
+                # If the very last iteration was a failed reverse, then we don't have the total energy stored anywhere.
+            else
+                config.fitEnergy = energy_after_deflection
+            end
+        else
+            n_accept += 1
+            config.fitEnergy = newEnergy
+        end
+    end
+
+    println("No of reflections: " ,n_reflect)
+    println("No of reverses: ",n_reverse)
+    println("No of straight acceptances: " ,n_accept)
+#    if newEnergy > oldEnergy
+#        return initialConfig
+#    else
+#        return config
+#    end
+end
+
+function get_nTypes(atoms)
+return [count(==(atomT),atoms.atomTypes) for atomT in unique(atoms.atomTypes)]
+end
+
+# Perform a random walk on a single configuration subject to the constraint that the total energy be less than the cutoff
+# Not walking using the force vector (GMC), just random walks.  This may not work well for some systems.
+function do_MC!(atoms::atoms,n_steps,model,E_max) 
+    # Loop over the number of random walks to take.
+    for iWalk in 1:n_steps
+        #@printf "Step in random walk %3i\n" iWalk
+        #Loop over all of the atoms in the simulation.
+        for (iAtom,atom) in enumerate(atoms.positions)
+            #@printf "Atom being moved. Type: %3i Number: %3i\n" iType iAtom 
+            # Get a random displacement vector
+            randDisplace = (2*rand(3) .- 1.0)*0.01
+#            println("before")
+#            display(atoms.positions[iType][iAtom])
+            atoms.positions[iAtom] .+= randDisplace
+            mapIntoCell!(atoms)
+#            println("after")
+#            display(atoms.positions[iType][iAtom])
+#            println(atoms.coordSys)
+            newEnergy = ase.eval_energy(atoms,model) # Want total energies for NS
+            # If the move resulted in a higher energy, undo the move and go to the next atom.
+            if newEnergy > E_max
+                #println("Rejected")
+                atoms.positions[iAtom] -= randDisplace
+            else # Otherwise, update the energy 
+                #println("Accepted")
+                atoms.model_energy = newEnergy
+            end     
+        end   
+#        randDisplacement = [[ (rand(3).-0.5)*0.1 for i =1:atoms.nType[j]] for j = 1:atoms.order]
+#        atoms.positions .+= randDisplacement  # Use the displacement to move this atom.
+
+       # println(totalEnergy(atoms,model))
+    end
+end
+
+
+function eval_energy(atoms,model;force_recalc = false)
  #   println(typeof(model))
-    return totalEnergy(atoms,model)
+    return totalEnergy(atoms,model,force_recalc = force_recalc)
 #    if typeof(model) == LennardJones.model{Matrix{Float64}}
 #        println("Found Lennard Jones model")
 #        return LennardJones.totalEnergy(atoms,model)
@@ -969,6 +1225,32 @@ function vegardsVolume(elements,atom_counts,volume)
     return wiley
 end
 
+
+function do_MD!(atoms::atoms,walk_length, model, E_max)
+    # Just copied over from MD. Needs checked!!!
+
+    N = length(atoms.positions)
+    forces = zeros(SVector{3,Float64},N)
+
+    idx = 1
+    dt = 0.1
+    for i=1:walk_length
+        for n=1:N
+            forces[n] = gradientForce(model,atoms,n,[2,2,2])
+        end
+        atoms.velocities .+= forces * 0.5 * dt
+#        display(atoms.positions)
+        atoms.positions .+= atoms.velocities * dt
+        mapIntoCell!(atoms)  # We may have gone outside the cell, put the atoms back
+        for n=1:N
+            forces[n] = gradientForce(model,atoms,n,[2,2,2])
+        end
+        atoms.velocities .+= forces * 0.5 * dt
+        display(forces)
+    end 
+    
+   # positions,temp
+end
 
 
 end

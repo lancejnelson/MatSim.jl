@@ -8,14 +8,14 @@ params:
   eps: 1e-6 # Algorithm stopping criteria
   n_iter: 2000  # Number of NS iterations per walker.
   atom_algorithm: GMC # GMC,MC, MD 
-  n_single_walker_steps: 1  
-  n_atom_steps: 5
+  n_single_walker_steps: 10  
+  n_atom_steps: 100
   n_cell_volume_steps: 5
   n_cell_shear_steps: 8
   n_cell_stretch_steps: 8
   cell_P: 5.0
   min_aspect_ratio: 0.8
-  max_volume_per_atom: 5
+  max_volume_per_atom: 32.0
   volume_step_size: 0.5  # Actually volume per atom step size.
   shear_step_size: 0.1
   stretch_step_size: 0.1

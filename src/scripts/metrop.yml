@@ -1,4 +1,4 @@
-nDraws: 100000
+nDraws: 10000
 nBurnin: 1000
 proposal: Gamma
 Priors:
@@ -28,15 +28,15 @@ Priors:
     parameters: 10 0.3
 candidateSigmas:
   aa: 
-    epsilon: 0.3
-    sigma: 0.02
+    epsilon: 0.5
+    sigma: 0.06
   ab:
-    epsilon: 1.0
+    epsilon: 0.7
     sigma: 0.05
   bb:
     epsilon: 1.4
-    sigma: 0.05
-  sigma: 0.2
+    sigma: 0.08
+  sigma: 0.3
 starting:
   aa:
     epsilon: 0.1

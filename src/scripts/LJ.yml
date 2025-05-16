@@ -1,4 +1,6 @@
 fitTo: peratom
+standardize: true
 cutoff: 5.6
+offset: 1.2
 order: 2
 

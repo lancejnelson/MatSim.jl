@@ -1,7 +1,7 @@
 module vaspUtils
 
 using Printf
-using Crystal
+using ase
 using DelimitedFiles
 
 
@@ -12,7 +12,7 @@ using DelimitedFiles
 #    file = open(file,"r")
 #    pos = readlines(file)
 #
-#    data = Vector{Crystal}()
+#    data = Vector{ase}()
 #    for (idx,line) in enumerate(pos)
 #
 #        if occursin("#--",line)
@@ -37,7 +37,7 @@ function readVaspFolders(folder::String,outFile::String;poscar = "CONTCAR",outca
         if length(pureDirs) > 0
             species = sort!([String(split(x,"pure")[2]) for x in pureDirs],rev = true)
             for (idx,i) in enumerate(pureDirs)
-                pure = Crystal.fromPOSCAR(joinpath(i,"POSCAR"),species)
+                pure = ase.fromPOSCAR(joinpath(i,"POSCAR"),species)
                 pure.title *= " (" * join(species, "-") * ")"
                 pure.energyPerAtomFP = getEnergy(joinpath(i,"OUTCAR"))/pure.nAtoms
                 pures[argmax(pure.nType)] = pure.energyPerAtomFP
@@ -57,7 +57,7 @@ function readVaspFolders(folder::String,outFile::String;poscar = "CONTCAR",outca
             poscarPresent = isfile(joinpath(obj,poscar))
             outcarPresent = isfile(joinpath(obj,outcar)) 
             if poscarPresent && outcarPresent
-                crystal = Crystal.fromPOSCAR(joinpath(obj,poscar),["Pt","Ag"])
+                crystal = ase.fromPOSCAR(joinpath(obj,poscar),["Pt","Ag"])
                 crystal.title *= " (" * join(species, "-") * ")"
                 crystal.energyPerAtomFP = getEnergy(joinpath(obj,outcar))/crystal.nAtoms
                 writePOSCAR(crystal,joinpath(folder,outFile),"a")
@@ -87,21 +87,19 @@ function readVaspFolders(folder::String,outFile::String;poscar = "CONTCAR",outca
 end
 
 
-function writePOSCAR(crystal::Crystal.config,fName::String,openCode::String = "w")
+function writePOSCAR(crystal::ase.atoms,fName::String,openCode::String = "w")
     open(fName,openCode) do f
         write(f,crystal.title,'\n')
         writedlm(f,crystal.latpar',' ')
         writedlm(f,crystal.lVecs',' ')
-        writedlm(f,crystal.nType',' ')
+        writedlm(f,ase.get_nTypes(crystal)',' ')
         write(f,crystal.coordSys[1],'\n')
         counter = 1
-        for basis in crystal.atomicBasis
-            for atom in basis
+        for atom in crystal.positions
                 writedlm(f,atom',' ')
                # seek(f,position(f) - 1)
             #    write(f,' ' * crystal.atomTypes[counter],'\n')
                 counter +=1
-            end
         end
     
     end
