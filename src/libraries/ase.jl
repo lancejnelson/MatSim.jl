@@ -173,7 +173,7 @@ with atomic positions at random locations.
 """
 # This function initializes only the cell parameters for an atoms object. All other type parameters are set to zero.
 function initialize_cell_shape(lPar::Float64, lVecs::Matrix{Float64})
-
+    
     return atoms("No Atoms", lPar,lVecs,[0,0],[0,0],0,["C"],[[SVector{3,Float64}(zeros(3))]],["Unk"],0.0,0.0,0.0,0.0,0.0,2,zeros(2,2),zeros(2,2))
 
 end

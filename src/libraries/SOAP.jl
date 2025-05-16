@@ -4,7 +4,7 @@ module SOAP
 using LegendrePolynomials
 using StaticArrays
 using LinearAlgebra
-using Crystal
+using ase
 
 
 struct descriptor

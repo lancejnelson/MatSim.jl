@@ -136,27 +136,33 @@ function std_hist(filePath)
     return std_hist
 end
 
-
+# " Calculates the mean Lennard Jones (LJ) parameters from a large set of data points contained within a file. Returns a LJ model object."
 function LJAverages(filePath)
     #nInteractionTypes = Int(order * (order + 1)/2)  # How many parameters do I expect to get
     cDir = pwd()
-    # Read the file header
-
+    
+    # Read the file header, uses key-value pairs to assign the veriables from each line
     system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff = readHeader(filePath)
-    println("cutoff")
+    
+    # Display the cutoff energy
+    println("Cutoff Energy")
     println(cutoff)
-    #Read the draws from file
-
+    
+    # Read the draws from file, accounting for whitespace
     data = readdlm(filePath,Float64;skipstart = 9)
-
+    # Get the number of draws by subtracting the lines for the header data
     nDraws = countlines(filePath) - 9
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
     #if order != nInteractionTypes
     #    error("Order of system doesn't match with number of parameters in draw file")
     #end
+    
+    # Initialize the averages for each LJ parameter with zeros
     ϵ_mean = zeros(order,order)
     σ_mean = zeros(order,order)
+
+    # Append the mean parameter value of each draw, normalized based on the number of draws (nDraws)
     for i = 1:order, j = i:order
         for k = 1:size(data)[1]  # Loop over all the draws
     #        println(data[k,:])
@@ -165,6 +171,7 @@ function LJAverages(filePath)
         end
     end
 
+    # Return the LennardJones model using the mean parameters
     return LennardJones.model(order, cutoff,σ_mean,ϵ_mean,sigmaEnergy,muEnergy,offsetEnergy,fitTo)
 end
 

@@ -1,5 +1,6 @@
 module LennardJones
 
+# Import local libraries
 #using Distributions
 #using StaticArrays
 #using Printf
@@ -9,17 +10,21 @@ module LennardJones
 #using LinearAlgebra
 #using enumeration
 #using PlotsMH
+
+# Import system libraries
 using YAML
 
 
 # The Lennard-Jones potential
 struct model{T}
     order:: Int64
-  #  params:: Array{Float64,3}
+    # params:: Array{Float64,3}
     cutoff:: Float64
 
     # Replace params above.
+    # sigma is the atomic spacing parameter in nm
     σ:: T#UpperTriangular{Float64, Matrix{Float64}}
+    # epsilon when divided by k_B, Boltzman's constant, is a temperature in Kelvin
     ϵ:: T#UpperTriangular{Float64, Matrix{Float64}}
 
     # Keep track of the standardization parameters so I can calculate the energy accurately.

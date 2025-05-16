@@ -1,6 +1,5 @@
-
-
-cd("/Users/legoses/OneDrive - BYU-Idaho/codes/MatSim/src/libraries/")
+cdir = @__DIR__
+cd(joinpath(cdir,"../libraries/"))
 push!(LOAD_PATH,pwd())
 
 using SOAP

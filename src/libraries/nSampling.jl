@@ -1,7 +1,10 @@
 module nSampling
 
+# Import local libraries
 using ase
 using LennardJones
+
+# Import packaged libraries
 using DataSets:DataSet
 using StaticArrays
 using LinearAlgebra
@@ -37,19 +40,27 @@ end
 
 
 
-
-
+# Initializes a Nested Sampling run, taking in the options, atom types, and model parameters. (Currently set up for Lennard Jones)
 function initialize(inputs,species,model)
+    # Add all atoms of all species types. inputs is a list of integers corresponding to each species.
     nAtoms = sum(inputs["n_Atoms"])
+    
+    # Get a random lattice constant spacing depending on the number of atoms and the maximum volume allowed each atom
     latticeConstant = (nAtoms * inputs["max_volume_per_atom"] * rand()^(1/(nAtoms + 1)))^(1/3)
+    
+    # Lattice vectors, which are given by a cubic/cartesian basis multiplied by the lattice constant
     lVecs = latticeConstant * [1.0 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0]
 
+    # Initialize a lattice for each walker
     configs = [ase.initialize_cell_shape(latticeConstant,lVecs) for i in 1:inputs["n_walkers"]]
 #    parsedlVecs = [parse.(Float64,split(x[1])) for x in inputs["lVecs"]]
 #    lVecs = hcat(parsedlVecs...)
 #    println("lattice constant: ", latticeConstant)
 #    println("lattice vectors: ", lVecs)
 #    configs = [ase.initialize_with_random_positions(latticeConstant,lVecs,inputs["n_Atoms"],inputs["minSep"],species) for i in 1:inputs["n_walkers"]]
+    
+    # Load in the walker parameters for all walkers
+    # TODO Should this be added to the NS.YAML or something similar?
     walk_params = Dict("n_steps" => 10,
                        "shear_step_size" => inputs["shear_step_size"],
                        "stretch_step_size" => inputs["stretch_step_size"])
@@ -86,11 +97,11 @@ function run_NS(NS::NS,LJ::LennardJones.model)
         ## Find the top Kr highest energies
         sEnergies =  reverse(sortperm([i.energyPerAtomModel for i in NS.walkers]))
        # println(sort([i.energyPerAtomModel for i in NS.walkers]))
-        energyCutoff = NS.walkers[sEnergies[NS.Kr]].energyPerAtomModel  # Find the 
+        energyCutoff = NS.walkers[sEnergies[NS.n_cull]].energyPerAtomModel  # Find the 
         # Which configs need to be thrown out.
-        forDelete = sEnergies[1:NS.Kr]
+        forDelete = sEnergies[1:NS.n_cull]
         # Which configs can be kept
-        keeps = sEnergies[NS.Kr + 1: end]
+        keeps = sEnergies[NS.n_cull + 1: end]
 
         println("Energy cutoff")
         display(energyCutoff)
@@ -126,8 +137,6 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
 end
 
 function do_atoms_step(atoms::ase.atoms, model,walk_params,E_max) #atoms::ase.atoms, model,walk_params,E_max)
-
-
     if walk_params.atom_algorithm == "GMC"
         do_single_walker_GMC!(atoms,walk_params.n_atom_steps,model,E_max)
     elseif walk_params.atom_algorithm == "MC"
@@ -332,7 +341,7 @@ end
 
 
 # Galilean Monte Carlo
- function do_single_walker_GMC!(config::ase.atoms,nWalk::Int64,model,E_max)
+function do_single_walker_GMC!(config::ase.atoms,nWalk::Int64,model,E_max)
     initialConfig = deepcopy(config)
     oldEnergy = ase.eval_energy(config,model)
     ase.DirectToCartesian!(config)
@@ -393,13 +402,12 @@ end
         end
     end
 
+    # Check to see if our energy is higher than the previous.
     if newEnergy > oldEnergy
         return initialConfig
     else
         return config
     end
-end
-
-
-
+    
+    end
 end
