@@ -3,7 +3,7 @@ module MatSim
 
 currentDir = abspath(@__DIR__)
 libPath = relpath(joinpath(currentDir,"libraries"))
-typePath = relpath(joinpath(currentDir,"types"))
+typePath = relpath(joinpath(currentDir,"modules"))
 
 # Add all of the public packages
 #using BenchmarkTools
@@ -17,7 +17,8 @@ using YAML
 using Plots
 #using Combinatorics
 # Get the types needed (MatTypes.jl in modules folder)
-include(abspath(typePath,"MatTypes.jl"))
+# nothing in here, so removing for now
+# include(abspath(typePath,"MatTypes.jl"))
 
 # Add all things that modify/handle crystal structures (CrystalUtils.jl in modules folder)
 include(abspath(libPath,"crystalUtils.jl"))   # Working with Crystal structures explicitly
