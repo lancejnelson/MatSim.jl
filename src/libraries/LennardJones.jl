@@ -13,10 +13,12 @@ using StatsBase
 
 # Import system libraries
 using YAML
+using DelimitedFiles
 
 
 # The Lennard-Jones potential
 struct model
+    name:: String
     order:: Int64
     # params:: Array{Float64,3}
     cutoff:: Float64
@@ -32,7 +34,7 @@ struct model
     offset:: Float64
     fitTo::String
     standardized::Bool
-
+    system::Vector{String}
 end
 
 struct MH{D<:Distribution{Univariate,Continuous}}
@@ -63,6 +65,11 @@ struct MH{D<:Distribution{Univariate,Continuous}}
 
     # Posterior
 #    logpost:: G
+end
+
+function initialize_empty_model()
+    return model("Empty",0,0.0,zeros(1),zeros(1),0.0,0.0,0.0,"None",false,[])
+
 end
 
 function initialize_metrop(path,model)
@@ -145,6 +152,7 @@ function initializeLJ(path::String,trainingSet;std_energy= 1.0, mean_energy = 0.
     fitTo = modelDict["fitTo"]::String
     offset = modelDict["offset"]::Float64
     standardize = modelDict["standardize"]::Bool
+    system = modelDict["system"]::Vector{String}
     #params = ones(order,order,2)
 #    coeffs = zeros(order * (order + 1) ÷ 2)
     σ = zeros(order * (order + 1) ÷ 2)
@@ -165,7 +173,7 @@ function initializeLJ(path::String,trainingSet;std_energy= 1.0, mean_energy = 0.
 
     end
     
-    return model(order,cutoff,σ,ϵ,std_energy,mean_energy,offset,fitTo,standardize)
+    return model("LJ",order,cutoff,σ,ϵ,std_energy,mean_energy,offset,fitTo,standardize,system)
     # Pre-calculate the distances needed for LJ
 
 #    metropDict = input["metrop"]::Dict{String,Any}
@@ -294,6 +302,7 @@ function do_MH(metrop::MH,data::DataSets.DataSet,model)
     cDir = pwd()
     println("Opening file  ", joinpath(cDir,"draws.out"))
     system = "System: " * data.title * "\n"
+    model_name = "Model: " * model.name * "\n"
     filename = "draws-LJ." * lstrip(data.title)
     fitTo = "fitTo: " * model.fitTo * "\n"
     io = open(joinpath(cDir,filename),"w")
@@ -303,6 +312,7 @@ function do_MH(metrop::MH,data::DataSets.DataSet,model)
     offset = model.standardized ? "offset-energy: " * string(model.offset) * "\n" : "offset-energy: " * string(0.0) * "\n"
     cutoff = "cutoff-radius: " * string(model.cutoff) * "\n"
     write(io,system)
+    write(io,model_name)
     write(io,fitTo)
     write(io,standardized)
     write(io,mn)
@@ -385,10 +395,60 @@ function writeDraw(model,std_draw,file)
     write(file,printString)
 end
 
+function get_LJ_averages(filePath)
+    #nInteractionTypes = Int(order * (order + 1)/2)  # How many parameters do I expect to get
+    cDir = pwd()
+    # Read the file header
+
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    println("cutoff")
+    println(cutoff)
+    #Read the draws from file
+    data = readdlm(filePath,Float64;skipstart = 10)
+
+    nDraws = countlines(filePath) - 9
+    order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
+    nInteractionTypes = sum(1:order)
+    #model = model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    #if order != nInteractionTypes
+    #    error("Order of system doesn't match with number of parameters in draw file")
+    #end
+    ϵ_mean = zeros(nInteractionTypes)
+    σ_mean = zeros(nInteractionTypes)
+    for i = 1:order, j = i:order
+        for k = 1:size(data)[1]  # Loop over all the draws
+            index = ase.index_to_integer(i,j,order)
+    #        println(data[k,:])
+            ϵ_mean[index] += convert.(Float64,data[k,(i - 1) * order + j])/nDraws
+            σ_mean[index] += convert.(Float64,data[k,nInteractionTypes + (i - 1) * order + j])/nDraws
+        end
+    end
+
+    return model(model_name,order, cutoff,σ_mean,ϵ_mean,sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize,system)
+end
 
 
+function readHeader(filePath)
+    outFile = open(filePath,"r")
+    system_line = split(split(readline(outFile))[2],"-")
+    system = String[]
+    push!(system,string(system_line[1]))
+    push!(system,string(system_line[2]))
+    model = split(readline(outFile))[2]
+    println(system)
+    println(model)
+    fitTo = lowercase(split(readline(outFile))[2])
+    standardize = lowercase(split(readline(outFile))[2]) == "true" ? true : false
+    muEnergy = parse(Float64,split(readline(outFile))[2])
+    sigmaEnergy = parse(Float64,split(readline(outFile))[2])
+    offsetEnergy = parse(Float64,split(readline(outFile))[2])
+    cutoff = parse(Float64,split(readline(outFile))[2])
+    acceptRates = parse.(Float64,split(readline(outFile)))
 
-
+    println(cutoff)
+    close(outFile)
+    return system,model,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates
+end
 
 
 end

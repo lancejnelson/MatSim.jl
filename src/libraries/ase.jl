@@ -232,19 +232,19 @@ with atomic positions at random locations.
 
 """
 # This function initializes only the cell parameters for an atoms object. All other type parameters are set to zero.
-function initialize_cell_shape(lPar::Float64, lVecs::SMatrix{3,3,Float64,9})
+function initialize_cell_shape(lPar::Float64, lVecs::SMatrix{3,3,Float64,9},nAtoms::Int)
 
-    return atoms("No Atoms", lPar,lVecs,["C"],[SVector{3,Float64}(zeros(3))],[SVector{3,Float64}(zeros(3))],[1.0],[1],["Unk"],0.0,0.0,zeros(3))
+    return atoms("No Atoms", lPar,lVecs,["C"],[SVector{3,Float64}(zeros(3)) for x= 1:nAtoms],[SVector{3,Float64}(zeros(3)) for x = 1:nAtoms],[1.0 for x=1:nAtoms],[1 for x = 1:nAtoms],["Unk"],0.0,0.0,zeros(3))
 
 end
 
 function set_coord_sys!(atoms,coordsys)
-    println(lowercase(coordsys)[1])
+    #println(lowercase(coordsys)[1])
     if lowercase(coordsys)[1] == 'c'
-        println("Here1")
+        #println("Here1")
         DirectToCartesian!(atoms)
     elseif lowercase(coordsys)[1] == 'd'
-        println("here2")
+        #println("here2")
         CartesianToDirect!(atoms)
     end
 end 
@@ -259,8 +259,8 @@ function set_cell!(atoms,new_cell; scale_atoms = false)
 
     if scale_atoms
         DirectToCartesian!(atoms)
-        for (iType,atomType) in enumerate(atoms.positions), (iAtom,atom) in enumerate(atomType)
-            atoms.positions[iType][iAtom] =  T * atoms.positions[iType][iAtom]
+        for (iAtom,atom) in enumerate(atoms.positions)
+            atoms.positions[iAtom] =  T * atoms.positions[iAtom]
         end
     end
     set_coord_sys!(atoms,currentCoordSys)
@@ -316,38 +316,57 @@ end
 #end
 
 # This routine will initialize an atoms object so that the atoms are randomly placed in the cell.
-function set_atoms_random!(atoms,nAtoms::Vector{Int64},cutoff::Float64,species::Vector{String})
+function set_atoms_random!(atoms,nAtoms::Vector{Int64},min_separation::Float64, cutoff,species::Vector{String})
 
     lPar = atoms.latpar
     lVecs = atoms.lVecs
     totalAtoms = sum(nAtoms)
     order = length(nAtoms)
     aTypes = hcat([ [n for i=1:nAtoms[n]]' for n=1:length(nAtoms)]...)'
-    positions = [zeros(Float64,3) for i=1:totalAtoms]  
-
+    loopBounds = SVector{3,Int64}(convert.(Int64,cld.(cutoff ,SVector{3,Float64}(norm(x) for x in eachcol(atoms.latpar * atoms.lVecs)) )))
+    atoms.positions = []
+    #atoms.positions .= [zeros(Float64,3) for i=1:totalAtoms]  
     nTotal = 0
     counter = 0
-    while nTotal < totalAtoms
+    while length(atoms.positions) < totalAtoms
         counter += 1
         if counter > 5000
             println("Having trouble putting that many atoms into this simulation cell.")
-            println("So far I've only place $nTotal atoms." )
+            println("So far I've only place $(length(atoms.positions)) atoms." )
+            println(counter)
             error("Stopping")
         end
         newAtomCart = lPar * lVecs * rand(3)
-
+        println("new Cart", newAtomCart)
+        if !atom_inside_cutoff(atoms,newAtomCart,min_separation)
+            push!(atoms.positions, CartesianToDirect(atoms.latpar * atoms.lVecs,SVector{3,Float64}(newAtomCart)))
+        end
+        display(atoms.positions)
+        continue
+        #println("considering new atom: " ,newAtomCart)
+        #println("All previous atoms:")
+        #display(positions[1:nTotal])
         newOK = true
         for i=1:nTotal
-            if norm(newAtomCart - positions[i]) < cutoff
+            println("checkin min distances")
+            display(atoms.positions)
+            println(i)
+            println(get_single_atom_neighbors(atoms,cutoff,atoms.positions[i],loopBounds))
+            println("n Total", nTotal)
+            #if !atom_inside_cutoff(atoms,newAtomCart,cutoff)
+            if min_distance < min_separation
                 newOK = false
             end
             if !newOK
+          #      println("rejecting at index: ", i)
                 break
             end
         end
         if newOK
+         #   println("accepting")
             nTotal += 1
-            positions[nTotal] .= newAtomCart
+            push!(atoms.positions, SVector{3,Float64}(newAtomCart))
+#            atoms.positions[nTotal] = newAtomCart
         end
     end
     #positions = getPartitions(atom_locations,nAtoms)
@@ -356,13 +375,10 @@ function set_atoms_random!(atoms,nAtoms::Vector{Int64},cutoff::Float64,species::
 #    r12 = UpperTriangular(zeros(k,k))
     lj_vec = zeros(2*Int(k*(k+1)/2))
     #println("lj_vec: ",lj_vec)
-    masses = [0.0 for i in 1:length(positions)]
-    velocities = [SVector{3,Float64}(zeros(3)) for i in 1:length(positions)]
-    atoms.positions = positions
-    atoms.velocities = velocities
-    atoms.masses = masses
+    atoms.masses = [0.0 for i in 1:length(atoms.positions)]
+    atoms.velocities = [SVector{3,Float64}(zeros(3)) for i in 1:length(atoms.positions)]
     atoms.species = species
-    atoms.coordSys = ["C"]
+    atoms.coordSys = ["D"]
     atoms.lj_vec = lj_vec
     atoms.title = "Random Locations"
     atoms.atomTypes = aTypes
@@ -596,7 +612,7 @@ function DirectToCartesian!(atoms::atoms)
 end
 
 function cell_volume(atoms::atoms)
-    return abs(cross(atoms.lVecs[:,1],atoms.lVecs[:,2])' * atoms.lVecs[:,3])
+    return atoms.latpar^3 * abs(cross(atoms.lVecs[:,1],atoms.lVecs[:,2])' * atoms.lVecs[:,3])
 end
 
 function CartesianToDirect!(atoms::atoms)
@@ -717,38 +733,13 @@ function reduce_C_in_ABC(ABC,eps)
 end
 
 
-function forceOnSingleParticle(positions::Array{SVector{2,Float64},1},particle::SVector{2,Float64},boxSize::Float64,model):: SVector{2,Float64}
-    fVec = SVector(0,0)
-    #modifiedPos = SVector{2,Float64}
-    #diffVec = SVector{2,Float64}
-    for i=1:size(positions,1)
-        diffVec = particle - positions[i]
-
-        if abs(diffVec[1]) > boxSize/2 && abs(diffVec[2]) > boxSize/2
-            modifiedPos = positions[i] + boxSize * SVector(sign(diffVec[1]) , sign(diffVec[2]))
-        elseif abs(diffVec[1]) > boxSize/2
-            modifiedPos = positions[i] + boxSize * SVector(sign(diffVec[1]) , 0)
-        elseif abs(diffVec[2]) > boxSize/2
-            modifiedPos = positions[i] + boxSize * SVector(0 , sign(diffVec[2]))
-        else
-            modifiedPos = copy(positions[i])
-        end
-        diffVec = particle - modifiedPos
-        distance = norm(diffVec)
-        
-        if distance > 0.5
-            fVec += 24 * (2/distance^13 - 1/distance^7) * diffVec/distance
-        end
-    end
-    return fVec
-
-end
 
 
 
-function singleAtomForce(model,atoms::atoms,centerAtom::Int64, loopBounds::SVector{3,Int64})
+function get_single_atom_force_lj(model,atoms::atoms,centerAtom::Int64, loopBounds::SVector{3,Int64})
     #ljvals = zeros(3,2)  #Specific to binary material.  Needs generalized to k-nary case.
     CartesianToDirect!(atoms)
+    order = length(unique(atoms.atomTypes))
 
     addVec = zeros(3)
     indices = zeros(2)
@@ -763,11 +754,11 @@ function singleAtomForce(model,atoms::atoms,centerAtom::Int64, loopBounds::SVect
             newCart = DirectToCartesian(atoms.latpar * atoms.lVecs,newAtom)  # Convert to cartesian coordinate system
             r = newCart - DirectToCartesian(atoms.latpar * atoms.lVecs,atoms.positions[centerAtom]) 
             if norm(r) < model.cutoff && !isapprox(norm(r),0,atol = 1e-3)
-                println("Adding to force")
+                #println("Adding to force")
 #                indices = iNeighbor < centerAtom[1] ? @SVector[iNeighbor,centerAtom] : @SVector[centerAtom,iNeighbor]
-                index = index_to_integer(centerType,neighborType,atoms.order)
-                fVec -=    12. * 4. * model.ϵ[index] * model.σ[index]^12/norm(r)^13 * r/norm(r)
-                fVec +=    6. * 4. * model.ϵ[index] * model.σ[index]^6/norm(r)^7 * r/norm(r)
+                index = index_to_integer(centerType,neighborType,order)
+                fVec -=    12. * model.ϵ[index] * model.σ[index]^12/norm(r)^13 * r/norm(r)
+                fVec +=    6. *  model.ϵ[index] * model.σ[index]^6/norm(r)^7 * r/norm(r)
             end
         end
     end
@@ -775,18 +766,51 @@ function singleAtomForce(model,atoms::atoms,centerAtom::Int64, loopBounds::SVect
 end
 
 
-function singleAtomEnergy(model,atoms::atoms,centerAtom::SVector{3,Float64}, centerType:: Integer, loopBounds::SVector{3,Int64})
-    singleAtomDistances!(atoms,model.cutoff,centerAtom,centerType,loopBounds)
+function get_single_atom_LJ_PE(model,atoms::atoms,centerAtom::SVector{3,Float64}, centerType:: Integer, loopBounds::SVector{3,Int64})
+    get_single_atom_r6_r12!(atoms,model.cutoff,centerAtom,centerType,loopBounds)
     coeffs = vcat(-1.0 * model.ϵ .* model.σ.^6, model.ϵ .* model.σ.^12)
     totalEnergy = atoms.lj_vec' * coeffs
     
     return (totalEnergy + model.offset) * model.stdEnergy + model.meanEnergy
 end
 
-function singleAtomDistances!(atoms::atoms,cutoff,centerAtom::SVector{3,Float64}, centerType:: Integer, loopBounds::SVector{3,Int64})
-    #    ljvals = zeros(3,2)  #Specific to binary material.  Needs generalized to n-ary case.
-    order = length(unique(atoms.atomTypes))
-    nInteractionTypes = sum(1:order)
+function get_neighbor_distances(atoms::atoms, cutoff)
+    CartesianToDirect!(atoms)
+    
+    eVals = eigvals(transpose(atoms.latpar .* atoms.lVecs) * (atoms.latpar .* atoms.lVecs))
+    maxN = cutoff/sqrt(minimum(eVals))
+    
+    loopBounds = SVector{3,Int64}(convert.(Int64,cld.(cutoff ,SVector{3,Float64}(norm(x) for x in eachcol(atoms.latpar * atoms.lVecs)) )))
+    # The outer two loops are to loop over different centering atoms.
+    nn_distances = []
+    for (iCenter,centerAtom) in enumerate(atoms.positions)
+        centerAtomC = DirectToCartesian(atoms.latpar * atoms.lVecs,centerAtom)
+        push!(nn_distances,get_single_atom_neighbors(atoms,cutoff,centerAtomC,loopBounds))    # Find the contribution to the LJ energy for this centering atom.
+        
+    end
+
+    return nn_distances
+end
+
+function atom_inside_cutoff(atoms::atoms,centerAtom::SVector{3,Float64},cutoff)
+    loopBounds = SVector{3,Int64}(convert.(Int64,cld.(cutoff ,SVector{3,Float64}(norm(x) for x in eachcol(atoms.latpar * atoms.lVecs)) )))
+    println(loopBounds)
+    for neighboratom in atoms.positions  #Loop over the different atom types.
+            # And these three inner loops are to find all of the periodic images of a neighboring atom.
+        for i = -loopBounds[1]:loopBounds[1], j = -loopBounds[2]:loopBounds[2], k= -loopBounds[3]:loopBounds[3]
+            newAtom = neighboratom + @SVector[i,j,k]
+            newCart = DirectToCartesian(atoms.latpar * atoms.lVecs,newAtom)
+            r = norm(newCart - centerAtom) 
+            if r < cutoff && !isapprox(r,0.0,atol = 1e-3)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function get_single_atom_neighbors(atoms::atoms,cutoff,centerAtom::SVector{3,Float64}, loopBounds::SVector{3,Int64})
+    nns = []
     for (iNeighbor,neighboratom) in enumerate(atoms.positions)  #Loop over the different atom types.
         neighborType = atoms.atomTypes[iNeighbor]
             # And these three inner loops are to find all of the periodic images of a neighboring atom.
@@ -795,6 +819,30 @@ function singleAtomDistances!(atoms::atoms,cutoff,centerAtom::SVector{3,Float64}
             newCart = DirectToCartesian(atoms.latpar * atoms.lVecs,newAtom)
             r = norm(newCart - centerAtom) 
             if r < cutoff && !isapprox(r,0.0,atol = 1e-3)
+                push!(nns,(iNeighbor,r))
+            end
+
+        end
+    end
+
+    return nns
+end
+
+
+function get_single_atom_r6_r12!(atoms::atoms,cutoff,centerAtom::SVector{3,Float64}, centerType:: Integer, loopBounds::SVector{3,Int64})
+    #    ljvals = zeros(3,2)  #Specific to binary material.  Needs generalized to n-ary case.
+    order = length(unique(atoms.atomTypes))
+    nInteractionTypes = sum(1:order)
+    foundInteractions = 0
+    for (iNeighbor,neighboratom) in enumerate(atoms.positions)  #Loop over the different atom types.
+        neighborType = atoms.atomTypes[iNeighbor]
+            # And these three inner loops are to find all of the periodic images of a neighboring atom.
+        for i = -loopBounds[1]:loopBounds[1], j = -loopBounds[2]:loopBounds[2], k= -loopBounds[3]:loopBounds[3]
+            newAtom = neighboratom + @SVector[i,j,k]
+            newCart = DirectToCartesian(atoms.latpar * atoms.lVecs,newAtom)
+            r = norm(newCart - centerAtom) 
+            if r < cutoff && !isapprox(r,0.0,atol = 1e-3)
+                foundInteractions += 1
                 #If the neighbor atom is inside the unit cell, then its going to be
                 # double counted at some point when we center on the other atom.  
                 # So we count it as half each time.
@@ -824,6 +872,7 @@ function singleAtomDistances!(atoms::atoms,cutoff,centerAtom::SVector{3,Float64}
             end
         end
     end
+#    println("Number of found interactions: ", foundInteractions)
     #return distMat
 end
 
@@ -835,14 +884,15 @@ function set_random_unit_velocities!(atoms,nTypes, KE_max)
     for i=1:nAtoms
         unit_vecs[i] /= norm(unit_vecs[i])
     end
-
     # In 3D the magnitude of the velocity should follow a r^1/3N distribution
     # where N is the number of atoms.  Generate a magnitude from this distribution.
-    mag = rand()^(1/(3 * length(nAtoms)))
+    mag = rand()^(1/(3 * nAtoms))
     velocities = similar(unit_vecs)
     for iAtom=1:nAtoms
-        scaledMag = mag * sqrt(2 * KE_max / atoms.masses[iAtom])
+        scaledMag = mag * sqrt(2 * KE_max/nAtoms / atoms.masses[iAtom])
         velocities[iAtom] = scaledMag * unit_vecs[iAtom]
+        println("check norm: ",norm(velocities[iAtom]))
+        println("mag: ", scaledMag)
     end
     atoms.velocities .= velocities
 #    scaledMag = mag * sqrt.([2 * KE_max ./ x for x in atoms.masses])
@@ -862,6 +912,14 @@ function set_masses(atoms::atoms,masses::Float64)
         atoms.masses[i] = masses
     end
 end
+
+
+
+function set_velocities(atoms::atoms,velocities::Float64)
+    for i=1:length(atoms.positions)
+        atoms.velocities[i] = SVector{3,Float64}(zeros(3))
+    end
+end
 function precalc_LJ_distances!(atoms::atoms,cutoff)
     CartesianToDirect!(atoms)
     
@@ -873,12 +931,12 @@ function precalc_LJ_distances!(atoms::atoms,cutoff)
     for (iCenter,centerAtom) in enumerate(atoms.positions)
         centerAtomType = atoms.atomTypes[iCenter]
         centerAtomC = DirectToCartesian(atoms.latpar * atoms.lVecs,centerAtom)
-        singleAtomDistances!(atoms,cutoff,centerAtomC,centerAtomType,loopBounds)    # Find the contribution to the LJ energy for this centering atom.
+        get_single_atom_r6_r12!(atoms,cutoff,centerAtomC,centerAtomType,loopBounds)    # Find the contribution to the LJ energy for this centering atom.
         
     end
 end
 
-function totalEnergy(atoms::atoms,model;force_recalc = false)
+function eval_PE_LJ(atoms::atoms,model;force_recalc = false)
     if all(atoms.lj_vec .== 0.0)
  #       println("Calculating Distances")
         precalc_LJ_distances!(atoms,model.cutoff)
@@ -953,34 +1011,61 @@ function gradientForce(model,atoms,atom,loopBounds; eps = 1e-3)
 end
 
 
-function get_random_displacements(n_vecs)
+function get_random_displacements(n_vecs,step_size)
     displacements = [zeros(SVector{3}) for i = 1:n_vecs]
     for j = 1:length(n_vecs)
         randVel = convert(SVector{3},(  2 * rand(3) .- 1.0))
-        displacements[j] = 0.2*randVel/norm(randVel)
+        displacements[j] = step_size*randVel/norm(randVel)
     end
     return displacements
 
 
 end
 
+
+function eval_forces(atoms,model)
+    forces = zeros(SVector{3,Float64},length(atoms.positions))
+
+    if lowercase(model.name) == "lj"
+        for (iAtom,atom) in enumerate(atoms.positions)  #Loop over the different atom types.
+            forces[iAtom] = get_single_atom_force_lj(model,atoms,iAtom,@SVector[2,2,2])
+        end
+
+    end 
+    return forces
+end
+
+function eval_forces!(atoms,model,forces)
+#    forces = zeros(SVector{3,Float64},length(atoms.positions))
+
+    if lowercase(model.name) == "lj"
+        for (iAtom,atom) in enumerate(atoms.positions)  #Loop over the different atom types.
+            forces[iAtom] = get_single_atom_force_lj(model,atoms,iAtom,@SVector[2,2,2])
+        end
+
+    end 
+end
+
 # Galilean Monte Carlo
-function do_GMC!(config::atoms,nWalk::Int64,model,E_max)
+function do_GMC!(config::atoms,model,walk_params,E_max)
     initialConfig = deepcopy(config)
     oldEnergy = ase.eval_energy(config,model)
     ase.DirectToCartesian!(config)
-    println("energy at start")
-    println(oldEnergy)
-    println(config.coordSys)
+   # println("energy at start")
+   # println(oldEnergy)
+   # println(config.coordSys)
 
-    displacements = get_random_displacements(length(config.positions))
+    displacements = get_random_displacements(length(config.positions),walk_params.MC_atom_step_size)
     forces = [zeros(SVector{3}) for x = 1:length(config.positions)]
     #display(velocities)
     n_reflect = 0
     n_reverse = 0
     n_accept = 0
-    for iWalk = 1:nWalk
-        println("iWalk: ", iWalk)
+    begin_energy = eval_energy(config,model,force_recalc = true)
+    #println("Energy at beginning:", begin_energy)
+    for iWalk = 1:walk_params.atom_traj_length
+        energy_at_start_of_loop = eval_energy(config,model,force_recalc = true)  # Calculate the new energies
+       # println("Energy at start of loop: ", energy_at_start_of_loop)
         last_good_positions = deepcopy(config.positions)
         last_good_displacements = deepcopy(displacements)
         config.positions .+= displacements  # Propogate the postions forward
@@ -989,13 +1074,15 @@ function do_GMC!(config::atoms,nWalk::Int64,model,E_max)
             println(displacements)
             error("Found NaNs")
         end
-        newEnergy = ase.eval_energy(config,model)  # Calculate the new energies
+        energy_after_displacement = eval_energy(config,model,force_recalc = true)  # Calculate the new energies
+        #println("Energy after displacement: ", energy_after_displacement)
         ase.DirectToCartesian!(config)
-        if newEnergy > E_max  # If we went uphill, we need to try and re-direct the displacements in the direction of the net force.
-            n_reflect += 1
-            for (iAtom,atom) in enumerate(config.positions)  #Loop over the different atom types.
-                forces[iAtom] = ase.gradientForce(model,config,iAtom,@SVector[2,2,2])
-            end
+        if energy_after_displacement > E_max  # If we went uphill, we need to try and re-direct the displacements in the direction of the net force.
+            #n_reflect += 1
+            eval_forces!(config,model,forces)
+#            for (iAtom,atom) in enumerate(config.positions)  #Loop over the different atom types.
+#                forces[iAtom] = ase.get_single_atom_force_lj(model,config,iAtom,@SVector[2,2,2])
+#            end
             # Sometimes the force vectors are zero, and therefore the normalization fails (divide by zero)
             # If the magnitude of the force is zero, then we don't need to do anything.
             nHat = [norm(x) > 0.0 ? x / norm(x) : x for x in forces]
@@ -1010,11 +1097,14 @@ function do_GMC!(config::atoms,nWalk::Int64,model,E_max)
                 error("Found NaNs in displacement 1")
             end
             config.positions += displacements
+            n_reflect += 1
             ase.mapIntoCell!(config)
-            energy_after_deflection = ase.eval_energy(config,model)
-            if energy_after_deflection > E_max
-                config.positions = last_good_positions
-                displacements = -1.0 * last_good_displacements
+            energy_after_deflection = ase.eval_energy(config,model,force_recalc = true)
+         #   println("Energy after deflection: ", energy_after_deflection)
+            if energy_after_deflection > E_max  # Reverse
+          #      println("Reversing")
+                config.positions = deepcopy(last_good_positions)
+                displacements = -1.0 * deepcopy(last_good_displacements)
                 if any([isnan(z) for x in displacements for y in x for z in y])
                     println(displacements)
                     error("Found NaNs in displacement 2")
@@ -1023,18 +1113,27 @@ function do_GMC!(config::atoms,nWalk::Int64,model,E_max)
                 n_reverse += 1
                 # If the very last iteration was a failed reverse, then we don't have the total energy stored anywhere.
             else
-                config.fitEnergy = energy_after_deflection
+           #     println("deflection accepted--------------------------------------------------------")
+            #    println("Energy:", eval_energy(config,model,force_recalc = true))
+                config.model_energy = energy_after_deflection
             end
         else
+           # println("Displacement accepted")
+           # println("Energy:", eval_energy(config,model,force_recalc = true))
             n_accept += 1
-            config.fitEnergy = newEnergy
+            config.model_energy = energy_after_displacement
         end
+        
+
     end
 
-    println("No of reflections: " ,n_reflect)
-    println("No of reverses: ",n_reverse)
-    println("No of straight acceptances: " ,n_accept)
-#    if newEnergy > oldEnergy
+#    println("No of reflections: " ,n_reflect)
+#    println("No of reverses: ",n_reverse)
+#    println("No of straight acceptances: " ,n_accept)
+#    println("Beginning Energy: ", begin_energy)
+#    println("End energy: ", config.model_energy )
+#    println("Energy Threshold: ", E_max)
+    return n_reflect + n_reverse, n_reflect#    if newEnergy > oldEnergy
 #        return initialConfig
 #    else
 #        return config
@@ -1047,15 +1146,16 @@ end
 
 # Perform a random walk on a single configuration subject to the constraint that the total energy be less than the cutoff
 # Not walking using the force vector (GMC), just random walks.  This may not work well for some systems.
-function do_MC!(atoms::atoms,n_steps,model,E_max) 
+function do_MC!(atoms::atoms,model,walk_params,E_max) 
     # Loop over the number of random walks to take.
-    for iWalk in 1:n_steps
+    n_accept = 0
+    for iWalk in 1:walk_params.atom_traj_length
         #@printf "Step in random walk %3i\n" iWalk
         #Loop over all of the atoms in the simulation.
         for (iAtom,atom) in enumerate(atoms.positions)
             #@printf "Atom being moved. Type: %3i Number: %3i\n" iType iAtom 
             # Get a random displacement vector
-            randDisplace = (2*rand(3) .- 1.0)*0.01
+            randDisplace = (2*rand(3) .- 1.0)*walk_params.MC_atom_step_size
 #            println("before")
 #            display(atoms.positions[iType][iAtom])
             atoms.positions[iAtom] .+= randDisplace
@@ -1063,14 +1163,15 @@ function do_MC!(atoms::atoms,n_steps,model,E_max)
 #            println("after")
 #            display(atoms.positions[iType][iAtom])
 #            println(atoms.coordSys)
-            newEnergy = ase.eval_energy(atoms,model) # Want total energies for NS
+            newEnergy = eval_energy(atoms,model) # Want total energies for NS
             # If the move resulted in a higher energy, undo the move and go to the next atom.
-            if newEnergy > E_max
+            if newEnergy > E_max  # reject move
                 #println("Rejected")
-                atoms.positions[iAtom] -= randDisplace
+                atoms.positions[iAtom] .-= randDisplace
             else # Otherwise, update the energy 
                 #println("Accepted")
                 atoms.model_energy = newEnergy
+                n_accept += 1
             end     
         end   
 #        randDisplacement = [[ (rand(3).-0.5)*0.1 for i =1:atoms.nType[j]] for j = 1:atoms.order]
@@ -1078,12 +1179,36 @@ function do_MC!(atoms::atoms,n_steps,model,E_max)
 
        # println(totalEnergy(atoms,model))
     end
+    return (n_steps,n_accept)
+end
+
+function get_momenta(atoms)
+    return atoms.masses .* atoms.velocities
+
+end
+
+function eval_KE(atoms)
+    KE = 1/2 * atoms.masses .* [x' * x for x in atoms.velocities]
+    return sum(KE)
+
 end
 
 
-function eval_energy(atoms,model;force_recalc = false)
+function eval_energy(atoms,model;P = 0,do_KE = true, force_recalc = false)
+#    println("here", P * cell_volume(atoms))
+#    println("here", eval_KE(atoms))
+    energy = P * cell_volume(atoms)
+    if do_KE
+        energy += eval_KE(atoms)
+    end
+#    println("here", energy)
  #   println(typeof(model))
-    return totalEnergy(atoms,model,force_recalc = force_recalc)
+    if lowercase(model.name) == "lj"
+        energy +=  eval_PE_LJ(atoms,model,force_recalc = force_recalc)
+    else
+        error("I don't know what model to use.")
+    end
+#    println(energy)
 #    if typeof(model) == LennardJones.model{Matrix{Float64}}
 #        println("Found Lennard Jones model")
 #        return LennardJones.totalEnergy(atoms,model)
@@ -1092,7 +1217,7 @@ function eval_energy(atoms,model;force_recalc = false)
 #        # Add other use cases as models become available
 #
 #    end
-
+    return energy
 end
 
 function minkowski_reduce(ABC,eps)
@@ -1226,30 +1351,69 @@ function vegardsVolume(elements,atom_counts,volume)
 end
 
 
-function do_MD!(atoms::atoms,walk_length, model, E_max)
+function do_MD!(atoms::atoms, model, walk_params;E_cutoff = NaN,KE_cutoff = NaN)
     # Just copied over from MD. Needs checked!!!
 
     N = length(atoms.positions)
     forces = zeros(SVector{3,Float64},N)
-
+    pre_positions = deepcopy(atoms.positions)
+    pre_velocities = deepcopy(atoms.velocities)
     idx = 1
-    dt = 0.1
-    for i=1:walk_length
-        for n=1:N
-            forces[n] = gradientForce(model,atoms,n,[2,2,2])
-        end
-        atoms.velocities .+= forces * 0.5 * dt
-#        display(atoms.positions)
-        atoms.positions .+= atoms.velocities * dt
+    begin_energy = eval_energy(atoms,model,force_recalc = true)
+    begin_KE = eval_KE(atoms)
+    for i=1:walk_params.atom_traj_length
+        eval_forces!(atoms,model,forces)
+#        println("check energy: ", eval_energy(atoms,model,force_recalc = true))
+#        for n=1:N
+#            forces[n] = get_single_atom_force_lj(model,atoms,n,[2,2,2])
+#        end
+#        display(forces)
+        atoms.velocities .+= forces ./ atoms.masses * 0.5 * walk_params.MD_time_step
+ #       println("Check velocities")
+  #      display(atoms.velocities)
+        atoms.positions .+= atoms.velocities * walk_params.MD_time_step
         mapIntoCell!(atoms)  # We may have gone outside the cell, put the atoms back
-        for n=1:N
-            forces[n] = gradientForce(model,atoms,n,[2,2,2])
-        end
-        atoms.velocities .+= forces * 0.5 * dt
-        display(forces)
+        eval_forces!(atoms,model,forces)
+
+##        for n=1:N
+#            forces[n] = get_single_atom_force_lj(model,atoms,n,[2,2,2])
+#        end
+        atoms.velocities .+= forces ./ atoms.masses * 0.5 * walk_params.MD_time_step
+  #      display(forces)
     end 
-    
-   # positions,temp
+    final_energy = eval_energy(atoms,model, force_recalc = true)
+    final_KE = eval_KE(atoms)
+   # println("Begin Energy:-------------------------------------> ", begin_energy)
+   #println("Final Energy: ", final_energy)
+    if abs(final_energy - begin_energy) > walk_params.MD_reject_eps * final_KE
+#        println("Rejecting on non-energy conserving MD walk")
+        n_accept = 0
+        atoms.positions .= deepcopy(pre_positions)
+        atoms.velocities .= deepcopy(pre_velocities)
+ #       println("Beginning Energy:", begin_energy)
+ #       println("Final Energy:", final_energy)
+        return (1,n_accept)
+    elseif !isnan(E_cutoff) && !isnan(KE_cutoff)
+        if final_energy > E_cutoff || final_KE > KE_cutoff
+  #          println("rejecting")
+            #println("End energy (check): ", final_energy)
+            #println("E-max (check): ", E_max)
+            n_accept = 0
+            atoms.positions .= deepcopy(pre_positions)
+            atoms.velocities .= deepcopy(pre_velocities)
+        else#if final_energy < E_cutoff || final_KE < KE_cutoff
+   #         println("Accepting")
+            n_accept = 1
+            atoms.model_energy = final_energy
+            atoms.velocities *= -1.0
+        end
+
+        return (1,n_accept)
+    else
+        println(E_cutoff, KE_cutoff)
+        error("I don't know what I'm suppose to do. I thought one of the other two branches would catch" )
+        
+    end
 end
 
 

@@ -1,22 +1,25 @@
 
 params:
   n_Atoms: [5, 3]
-  minSep: 3.0
-  n_walkers: 100 # Number of walkers in the pool.
+  min_atom_separation: 2.0
+  n_walkers: 20 # Number of walkers in the pool.
   n_cull: 6  # Number of walkers to remove at each iteration.
   atom_traj_length: 8 # Length of random walk.
-  eps: 1e-6 # Algorithm stopping criteria
+  eps: 1e-3 # Algorithm stopping criteria
   n_iter: 2000  # Number of NS iterations per walker.
-  atom_algorithm: GMC # GMC,MC, MD 
-  n_single_walker_steps: 10  
+  atom_algorithm: MD # GMC,MC, MD 
+  MC_atom_step_size: 0.0005  # Displacements of atoms in GMC as a multiple of max length between atoms (max_vol_per_atom * n_atoms)^(1/3))
+  MD_time_step: 5.0e-2
+  MD_reject_eps: 1e-2  # If the energy during MD trajectory changes by more than <MD_reject_eps> * KE_max, we reject it.  
+  n_single_walker_steps: 500  # Number of steps that a single walker should take (long enough to decorrelate)  
   n_atom_steps: 100
   n_cell_volume_steps: 5
   n_cell_shear_steps: 8
   n_cell_stretch_steps: 8
-  cell_P: 5.0
+  cell_P: 0.62  # Atmospheric Pressure in units of eVs / A^3
   min_aspect_ratio: 0.8
   max_volume_per_atom: 32.0
-  volume_step_size: 0.5  # Actually volume per atom step size.
-  shear_step_size: 0.1
+  volume_step_size: 2.0  # Actually volume per atom step size.
+  shear_step_size: 0.5
   stretch_step_size: 0.1
 

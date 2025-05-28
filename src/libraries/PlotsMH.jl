@@ -11,13 +11,13 @@ using Combinatorics
 #using ase
 
 function σ_hists(filePath)
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
-    data = readdlm(filePath,Float64;skipstart = 9)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
 
     σ_draws = zeros(nDraws,nInteractionTypes)
     aRates = zeros(nInteractionTypes)
@@ -41,13 +41,13 @@ end
 
 function ϵ_hists(filePath)
 
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
-    data = readdlm(filePath,Float64;skipstart = 9)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
 
     ϵ_draws = zeros(nDraws,nInteractionTypes)
     aRates = zeros(nInteractionTypes)
@@ -74,7 +74,7 @@ end
 
 function std_hist(filePath)
 
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
     aRate = 0.0
     for (idx,line) in enumerate(eachline(filePath))
         if idx == 8
@@ -83,12 +83,12 @@ function std_hist(filePath)
         end
     end
  
-    data = readdlm(filePath,Float64;skipstart = 9)
+    data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
 
     std_draws = convert.(Float64,data[:,end])
     
@@ -104,71 +104,20 @@ function std_hist(filePath)
     return std_hist
 end
 
-# " Calculates the mean Lennard Jones (LJ) parameters from a large set of data points contained within a file. Returns a LJ model object."
-function LJAverages(filePath)
-    #nInteractionTypes = Int(order * (order + 1)/2)  # How many parameters do I expect to get
-    cDir = pwd()
-    
-    # Read the file header, uses key-value pairs to assign the veriables from each line
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
-    
-    # Display the cutoff energy
-    println("Cutoff Energy")
-    println(cutoff)
-        # Read the draws from file, accounting for whitespace
-    data = readdlm(filePath,Float64;skipstart = 9)
-    # Get the number of draws by subtracting the lines for the header data
-    nDraws = countlines(filePath) - 9
-    order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
-    nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
-    #if order != nInteractionTypes
-    #    error("Order of system doesn't match with number of parameters in draw file")
-    #end
-    
-    # Initialize the averages for each LJ parameter with zeros
-    ϵ_mean = zeros(nInteractionTypes)
-    σ_mean = zeros(nInteractionTypes)
 
-    # Append the mean parameter value of each draw, normalized based on the number of draws (nDraws)
-    for i = 1:order, j = i:order
-        for k = 1:size(data)[1]  # Loop over all the draws
-            index = ase.index_to_integer(i,j,model.order)
-    #        println(data[k,:])
-            ϵ_mean[index] += convert.(Float64,data[k,(i - 1) * order + j])/nDraws
-            σ_mean[index] += convert.(Float64,data[k,nInteractionTypes + (i - 1) * order + j])/nDraws
-        end
-    end
 
-    # Return the LennardJones model using the mean parameters
-    return LennardJones.model(order, cutoff,σ_mean,ϵ_mean,sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
-end
 
-function readHeader(filePath)
-    outFile = open(filePath,"r")
-    system = split(readline(outFile))[1]
-    fitTo = lowercase(split(readline(outFile))[2])
-    standardize = lowercase(split(readline(outFile))[2]) == "true" ? true : false
-    muEnergy = parse(Float64,split(readline(outFile))[2])
-    sigmaEnergy = parse(Float64,split(readline(outFile))[2])
-    offsetEnergy = parse(Float64,split(readline(outFile))[2])
-    cutoff = parse(Float64,split(readline(outFile))[2])
-    acceptRates = parse.(Float64,split(readline(outFile)))
 
-    println(cutoff)
-    close(outFile)
-    return system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates
-end
 
 function predPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= Vector{ase.atoms}(undef,2), type = "fenth")
     #Read the draws from file
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
-    data = readdlm(filePath,Float64;skipstart = 9)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    data = readdlm(filePath,Float64;skipstart = 10)
 
-    nDraws = countlines(filePath) - 9
+    nDraws = countlines(filePath) - 10
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
     ϵ_draws = zeros(nDraws,nInteractionTypes)
     σ_draws = zeros(nDraws,nInteractionTypes)
     for i = 1:order, j = i:order
@@ -228,13 +177,13 @@ end
 
 function concentrationPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= Vector{ase.atoms}(undef,2), type = "fenth")
     #Read the draws from file
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
-    data = readdlm(filePath,Float64;skipstart = 9)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
 
     ϵ_draws = zeros(nDraws,nInteractionTypes)
     σ_draws = zeros(nDraws,nInteractionTypes)
@@ -333,15 +282,15 @@ function concentrationPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= 
 end
 
 function tracePlots(filePath)
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
     #Read the draws from file
 
-    data = readdlm(filePath,Float64;skipstart = 9)
+    data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
 
     ϵ_draws = zeros(nDraws,nInteractionTypes)
     σ_draws = zeros(nDraws,nInteractionTypes)
@@ -364,15 +313,15 @@ end
 
 
 function hists2d(filePath,type; ar = 1.0)
-    system,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
     #Read the draws from file
 
-    data = readdlm(filePath,Float64;skipstart = 9)
+    data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
 
     ϵ_draws = zeros(nDraws,nInteractionTypes)
     σ_draws = zeros(nDraws,nInteractionTypes)

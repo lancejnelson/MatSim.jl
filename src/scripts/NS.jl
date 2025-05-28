@@ -1,51 +1,48 @@
-# Get the relative path set up
-cdir = @__DIR__
-cd(joinpath(cdir,"../libraries/"))
-print(pwd())
-push!(LOAD_PATH,pwd())
+
+
+cDir = @__DIR__
+cd(cDir)
+push!(LOAD_PATH,joinpath(cDir,"../libraries"))
 
 # Import packages from libraries folder
 using ase
-using PlotsMH
 using LennardJones
 using nSampling
-
-# Import system packages
 using YAML
 
-# Move back to the script directory
-cDir = @__DIR__
-cd(cDir)
-
-### Initialize the model
-# The draws from the LennardJones potential are located in the same folder
+# Initialize the model
 resultsPath = joinpath(cDir,"draws-LJ.Pt-Ag")
 
-# Plot the results
-# NO CODE HERE
-
 # Build model with averages of the draws for fit parameters.
-LJ_average = PlotsMH.LJAverages(resultsPath)
-
-#LennardJones.totalEnergy(LJ_average,["Ag","Pt"])
-
-# Load the configuration for the Nested Sampling run from a file 
+LJ_average = LennardJones.get_LJ_averages(resultsPath)
 input = YAML.load_file(joinpath(cDir,"NS.yml"))
-species = ["Ag", "Pt"]
+myNS = nSampling.initialize(input["params"],LJ_average);# Initialize the simulation...
+nSampling.tune_step_sizes!(myNS,LJ_average)
+nSampling.run_NS(myNS,LJ_average)
 
-### Test structures for the starting positions of the atoms
-# Face-Center Cubic
-fcc = ase.fromPOSCAR(joinpath(cDir,"POSCAR.fcc"),["Ag"])
 
-# Square Cubic
-# sc = atomsSim.fromPOSCAR(joinpath(cDir,"POSCAR.sc"),["Ag"])
+# Disregard all below
 
-# 
-myNS = nSampling.initialize(input["params"],species,LJ_average)# Initialize the simulation...
-#walk_params = Dict("n_steps"=>myNS.n_single_walker_steps, "volume_step_size"=>myNS.volume_step_size, "shear_step_size" => myNS.shear_step_size, "stretch_step_size" => myNS.stretch_step_size,"max_volume_per_atom"=>myNS.max_volume_per_atom, "min_aspect_ratio"=>myNS.min_aspect_ratio)
+display(ase.eval_KE(myNS.walkers[sEnergies[end-3]]))
+println(myNS.walkers[sEnergies[end-3]].coordSys)
+myNS.walkers[4].lj_vec
+ase.eval_forces(myNS.walkers[1],LJ_average)
+display(ase.get_neighbor_distances(myNS.walkers[1],4.0))
+println(myNS.walker_params.MD_time_step)
+nSampling.tune_step_sizes(myNS.walkers[sEnergies[end-2]],myNS.walker_params,LJ_average,E_max)
+
+ase.eval_KE(myNS.walkers[4])
+sum(0.5 * [x' * x for x in myNS.walkers[4].velocities])
+nSampling.run_NS(myNS,LJ_average)
+check =ase.get_nn_list(myNS.walkers[2],5.6)
 check = myNS.walkers[1].positions
+myvec = ["ab", "dc", "ef"]
+!("ab" in myvec)
+println(myNS.walkers[1].lVecs)
+println(ase.cell_volume(myNS.walkers[1]))
 ase.DirectToCartesian!(myNS.walkers[1])
-ase.do_MD!(myNS.walkers[1],20,LJ_average,10)
+myNS.walker_params.MD_time_step = 0.000001
+ase.do_MD!(myNS.walkers[3],LJ_average,myNS.walker_params,E_max)
 2 .* check #.* [2 * 5.0 ./ x for x in check] #.* 2 .* check
 [2 * 5.0 ./ x for x in check] #.* 2 .* check
 print(myNS.walkers[5].positions)
