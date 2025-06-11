@@ -11,7 +11,7 @@ using Combinatorics
 #using ase
 
 function σ_hists(filePath)
-    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = LennardJones.readHeader(filePath)
     data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
@@ -41,7 +41,7 @@ end
 
 function ϵ_hists(filePath)
 
-    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = LennardJones.readHeader(filePath)
     data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
@@ -74,7 +74,7 @@ end
 
 function std_hist(filePath)
 
-    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = LennardJones.readHeader(filePath)
     aRate = 0.0
     for (idx,line) in enumerate(eachline(filePath))
         if idx == 8
@@ -111,13 +111,14 @@ end
 
 function predPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= Vector{ase.atoms}(undef,2), type = "fenth")
     #Read the draws from file
-    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = LennardJones.readHeader(filePath)
     data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 10
     order = convert(Int64,ceil(sqrt((size(data)[2] - 1)/2)))
     nInteractionTypes = sum(1:order)
-    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize)
+    println(system)
+    model = LennardJones.model(model_name,order,cutoff,zeros(nInteractionTypes),zeros(nInteractionTypes),sigmaEnergy,muEnergy,offsetEnergy,fitTo,standardize,system)
     ϵ_draws = zeros(nDraws,nInteractionTypes)
     σ_draws = zeros(nDraws,nInteractionTypes)
     for i = 1:order, j = i:order
@@ -136,9 +137,9 @@ function predPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= Vector{as
     for j = 1:length(dataSet.configs)
         
         if fitTo == "peratom"
-            trueVals[j] = dataSet.configs[j].FP_total_energy/ase.nAtoms(dataSet.configs[j])
+            trueVals[j] = dataSet.configs[j].energies[1]/dataSet.configs[j].nAtoms
         else
-            trueVals[j] = dataSet.configs[j].FP_total_energy
+            trueVals[j] = dataSet.configs[j].energies[1]
         end
 
 
@@ -177,7 +178,7 @@ end
 
 function concentrationPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= Vector{ase.atoms}(undef,2), type = "fenth")
     #Read the draws from file
-    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = LennardJones.readHeader(filePath)
     data = readdlm(filePath,Float64;skipstart = 10)
 
     nDraws = countlines(filePath) - 9
@@ -200,11 +201,11 @@ function concentrationPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= 
     for j = 1:length(dataSet.configs)
         printflag = false 
         if type == "fenth"
-            trueVals[j] = ase.formationEnergy(dataSet.configs[j].FP_total_energy/ase.nAtoms(dataSet.configs[j]),[x.FP_total_energy for x in pures] ,ase.get_concentrations(dataSet.configs[j]))    
+            trueVals[j] = ase.formationEnergy(dataSet.configs[j].energies[1]/ase.nAtoms(dataSet.configs[j]),[x.energies[1] for x in pures] ,ase.get_concentrations(dataSet.configs[j]))    
         elseif type == "peratom"
-            trueVals[j] = dataSet.configs[j].FP_total_energy/ase.nAtoms(dataSet.configs[j])
+            trueVals[j] = dataSet.configs[j].energies[1]/ase.nAtoms(dataSet.configs[j])
         elseif type == "total"
-            trueVals[j] = dataSet.configs[j].FP_total_energy
+            trueVals[j] = dataSet.configs[j].energies[1]
         else
             error("I don't know what kind of energies you want me to plot!")
         end
@@ -226,8 +227,8 @@ function concentrationPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= 
                     predictVals[j] = 0.0
                     predictUnc[j] = 0.0
                 else
-                    predictVals[j] = mean([ase.formationEnergy(draw,[x.FP_total_energy for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
-                    predictUnc[j] = std([ase.formationEnergy(draw,[x.FP_total_energy for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
+                    predictVals[j] = mean([ase.formationEnergy(draw,[x.energies[1] for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
+                    predictUnc[j] = std([ase.formationEnergy(draw,[x.energies[1] for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
                 end
             elseif type == "peratom"
                 predictVals[j] = mean(overDraws)
@@ -240,8 +241,8 @@ function concentrationPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= 
             end
         elseif fitTo == "total"
             if type == "fenth"
-                predictVals[j] = mean([ase.formationEnergy(draw/ase.nAtoms(dataSet.configs[j]),[x.FP_total_energy for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
-                predictUnc[j] = std([ase.formationEnergy(draw/ase.nAtoms(dataSet.configs[j]),[x.FP_total_energy for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
+                predictVals[j] = mean([ase.formationEnergy(draw/ase.nAtoms(dataSet.configs[j]),[x.energies[1] for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
+                predictUnc[j] = std([ase.formationEnergy(draw/ase.nAtoms(dataSet.configs[j]),[x.energies[1] for x in pures] ,ase.get_concentrations(dataSet.configs[j])) for draw in overDraws])
             elseif type == "peratom"
                 predictVals[j] = mean(overDraws)/ase.nAtoms(dataSet.configs[j])
                 predictUnc[j] = std(overDraws)/ase.nAtoms(dataSet.configs[j])
@@ -282,7 +283,7 @@ function concentrationPlot(filePath, dataSet::DataSet;pures::Vector{ase.atoms}= 
 end
 
 function tracePlots(filePath)
-    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = LennardJones.readHeader(filePath)
     #Read the draws from file
 
     data = readdlm(filePath,Float64;skipstart = 10)
@@ -313,7 +314,7 @@ end
 
 
 function hists2d(filePath,type; ar = 1.0)
-    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = readHeader(filePath)
+    system,model_name,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates = LennardJones.readHeader(filePath)
     #Read the draws from file
 
     data = readdlm(filePath,Float64;skipstart = 10)

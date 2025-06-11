@@ -157,11 +157,11 @@ function initializeLJ(path::String,trainingSet;std_energy= 1.0, mean_energy = 0.
 
     if standardize
         if fitTo == "peratom"
-            mean_energy = mean([i.FP_total_energy/ase.nAtoms(i) for i in trainingSet.configs])
-            std_energy = std([i.FP_total_energy/ase.nAtoms(i) for i in trainingSet.configs])
+            mean_energy = mean([i.energies[1]/i.nAtoms for i in trainingSet.configs])
+            std_energy = std([i.energies[1]/i.nAtoms for i in trainingSet.configs])
         else
-            mean_energy = mean([i.FP_total_energy for i in trainingSet.configs])
-            std_energy = std([i.FP_total_energy for i in trainingSet.configs])
+            mean_energy = mean([i.energies[1] for i in trainingSet.configs])
+            std_energy = std([i.energies[1] for i in trainingSet.configs])
         end
 
     else
@@ -185,7 +185,7 @@ end
 function logNormal(data::DataSets.DataSet,model,σ::Float64)::Float64
     thesum = 0.0
     for i = 1:length(data.configs)
-        thesum += (data.configs[i].FP_total_energy - ase.eval_energy(data.configs[i],model))^2
+        thesum += (data.configs[i].energies[1] - ase.eval_energy(data.configs[i],model))^2
     end
     thesum *= - 1/(2 * σ^2)
     
@@ -444,7 +444,7 @@ function readHeader(filePath)
 
     println(cutoff)
     close(outFile)
-    return system,model,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates
+    return sort(system,rev = true),model,fitTo,standardize,muEnergy,sigmaEnergy,offsetEnergy,cutoff,acceptRates
 end
 
 

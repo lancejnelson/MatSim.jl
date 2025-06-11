@@ -9,7 +9,7 @@ using StatsBase
 using YAML
 
 using enumeration
-using Crystal
+using ase
 using vaspUtils
 cwd = pwd()
 cDir = @__DIR__
@@ -41,7 +41,7 @@ for i in structs
 #    vaspUtils.writePOTCAR(path,settings["POTCAR"])  # Write the POTCAR file
     vaspUtils.writeINCAR(path,settings["INCAR"])   # Write the INCAR file
     #enumStruct = enumeration.read_struct_from_enum(enumSettings["file"],i)
-    crystal = Crystal.fromEnum(enumSettings["file"],i,potcar["species"])
+    crystal = ase.fromEnum(enumSettings["file"],i,potcar["species"])
     vaspUtils.writePOSCAR(crystal,joinpath(path,"POSCAR"),)  # Write the POSCAR file.
     vaspUtils.writeKPOINTS(path,kp)
 end
