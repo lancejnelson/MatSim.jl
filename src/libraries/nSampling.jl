@@ -182,10 +182,10 @@ function tune_step_sizes!(NS,model::LennardJones.model)
    
     allGood = false
     index = 0
-    chosen_sets = sample(keeps,nthreads())
+    chosen_sets = sample(keeps,nthreads(), replace=false)
     
     
-    orig_atoms = ase.copy_atoms(atoms)
+    #orig_atoms = ase.copy_atoms(atoms)
     while !allGood
         index += 1
         println("E-max", E_max)
@@ -193,7 +193,8 @@ function tune_step_sizes!(NS,model::LennardJones.model)
         a_rates = Dict("volume" => [0,0], "shear" => [0,0], "stretch" => [0,0], "atoms" => [0,0])
         @threads for chosen_set in chosen_sets
             atoms = ase.copy_atoms(NS.walkers[chosen_set])
-            a_rate = walk_single_walker_multithread!(atoms,model,NS.walker_params,E_max,NS.cell_P)
+            div = nthreads()
+            a_rate = walk_single_walker_multithread!(atoms,model,NS.walker_params,E_max,NS.cell_P,div)
             for key in keys(a_rates)
                 a_rates[key][1] += a_rate[key][1]
                 a_rates[key][2] += a_rate[key][2]
@@ -208,23 +209,13 @@ function tune_step_sizes!(NS,model::LennardJones.model)
         end
         println(rates_good)
         allGood =  all(rates_good)
-        #a_rates = walk_single_walker!(atoms,model,NS.walker_params,E_max,NS.cell_P)
-        #display(a_rates)
-        # display(NS.walker_params)
-        # rates_good = []
-        # for key in keys(a_rates)
-        #     rate = a_rates[key][2]/a_rates[key][1]
-        #     push!(rates_good,adjust_step_sizes!(NS.walker_params,key,rate))
-        # end
-        # println(rates_good)
-        # allGood =  all(rates_good)
         
         if index > 2000
             error("Taking too long")
         end
-        # if a_rates["volume"][2] == 0 && a_rates["shear"][2] == 0 && a_rates["stretch"][2] == 0 && a_rates["atoms"][2] == 0
-        #     error("0s in the walker_params")
-        # end
+        if a_rates["volume"][2] == 0 && a_rates["shear"][2] == 0 && a_rates["stretch"][2] == 0 && a_rates["atoms"][2] == 0
+            error("0s in the walker_params")
+        end
     end
       
 
@@ -240,8 +231,6 @@ function reverse_sort_energies(NS)
 
     sortperm!(perms,energies)
     return perms
-#    return reverse(perms)
-        
 
 end
 
@@ -257,8 +246,9 @@ function run_NS(NS::NS,LJ::LennardJones.model)
     write(io, "N_steps_per_walker = " * string(NS.n_iter) * "\n")
     write(io, "eps = " * string(NS.eps) * "\n")
     perms = zeros(MVector{length(NS.walkers),Int})
+    notGood = false
+    
     while V > NS.eps
-#    for i= 1:100
         println(i)
         println("V = ", V)
         ## Find the top Kr highest energies
@@ -278,7 +268,7 @@ function run_NS(NS::NS,LJ::LennardJones.model)
         println("KE (lowest energy cull): ", ase.eval_KE(NS.walkers[perms[NS.n_cull]]))
         println("Total (lowest energy cull): ", ase.eval_energy(NS.walkers[perms[NS.n_cull]],LJ,P= NS.cell_P))
 
-        if i %12 == 0  # 12 is pretty arbitrary.. Need a better way to see if need to re-tune
+        if notGood#i %12 == 0  # 12 is pretty arbitrary.. Need a better way to see if need to re-tune
             println("Stopping to retune step sizes")
             energies_before = [ase.eval_energy(walker, LJ, P = NS.cell_P) for walker in NS.walkers]
             tune_step_sizes!(NS,LJ)
@@ -287,22 +277,47 @@ function run_NS(NS::NS,LJ::LennardJones.model)
                 error("Failsafe: tune_step_sizes caused at least one configuration to change")
             end
             println("Done with tune up------------------------------------------------->")
+            notGood = false
         end
+        ###############################MULTITHREADING##########################
+        a_rates = Dict("volume" => [0,0], "shear" => [0,0], "stretch" => [0,0], "atoms" => [0,0])
         for replace_walker in forDelete
-            ###############################MULTITHREADING##########################
             NS.walkers[replace_walker] = ase.copy_atoms(NS.walkers[sample(keeps,1)[1]])
             #walk_single_walker!(NS.walkers[replace_walker],LJ,NS.walker_params,E_max,NS.cell_P)
-            extra_walkers = sample(keeps,nthreads()-1, replace=false)
-            chosen_walkers = vcat(extra_walkers,replace_walker)
-            
-            @threads for chosen_walker in chosen_walkers
-                walk_single_walker_multithread!(NS.walkers[chosen_walker],LJ,NS.walker_params,E_max,NS.cell_P)
+        end   
+        np = nthreads()
+        if  ceil(NS.walker_params.n_single_walker_steps/np) < 20
+            error("not all threads are being used")
+            np = floor(NS.walker_params.n_single_walker_steps/20)
+        end   
+        if length(forDelete) > np
+            error("inefficient number of threads")
+        elseif length(forDelete) == np
+            chosen_walkers = forDelete
+        else
+            extra_walkers = sample(keeps,np-length(forDelete), replace=false)
+            chosen_walkers = vcat(extra_walkers,forDelete)
+        end  
+          
+        
+        @threads for chosen_walker in chosen_walkers
+            a_rate = walk_single_walker_multithread!(NS.walkers[chosen_walker],LJ,NS.walker_params,E_max,NS.cell_P,length(chosen_walkers))
+            for key in keys(a_rates)
+                a_rates[key][1] += a_rate[key][1]
+                a_rates[key][2] += a_rate[key][2]
             end
-            
         end
+        rates_good = []
+        for key in keys(a_rates)
+            rate = a_rates[key][2]/a_rates[key][1]
+            if rate < 1/8 || rate > 3/4
+                notGood = true
+            end
+            push!(rates_good,adjust_step_sizes!(NS.walker_params,key,rate))
+        end
+   
         
-        
-        
+            
         i += 1
         V = ((NS.n_walkers - NS.n_cull + 1)/(NS.n_walkers + 1))^i
         write(io,string(V) * " ")
@@ -355,15 +370,15 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
     return acceptance_rates
 end
 
-function walk_single_walker_multithread!(atoms::ase.atoms, model, walk_params::NS_walker_params,E_max,cell_P)
+function walk_single_walker_multithread!(atoms::ase.atoms, model, walk_params::NS_walker_params,E_max,cell_P,div)
     idx = 0
 
     atoms_cutoff =  walk_params.n_atom_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     volume_cutoff = atoms_cutoff + walk_params.n_cell_volume_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     shear_cutoff = volume_cutoff + walk_params.n_cell_shear_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     stretch_cutoff = shear_cutoff + walk_params.n_cell_stretch_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
-    
-    numWalks = ceil(walk_params.n_single_walker_steps/nthreads())
+    numWalks = ceil(walk_params.n_single_walker_steps/div)
+
     if numWalks < 20
         numWalks = 20
     end
