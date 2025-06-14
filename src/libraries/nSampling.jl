@@ -8,7 +8,7 @@ using LinearAlgebra
 using Distributions
 using Random
 using TimerOutputs
-
+using Base.Threads
 
 mutable struct NS_walker_params
     n_single_walker_steps:: Int64
@@ -178,33 +178,53 @@ function tune_step_sizes!(NS,model::LennardJones.model)
     keeps = sEnergies[NS.n_cull + 1: end]
     E_max = NS.walkers[sEnergies[1]].energies[2]
     atoms = ase.copy_atoms(NS.walkers[sample(keeps,1)[1]])
-#    atoms = deepcopy(NS.walkers[sample(keeps,1)[1]])
+
    
     allGood = false
     index = 0
-#    orig_atoms = deepcopy(atoms)
+    chosen_sets = sample(keeps,nthreads())
+    
+    
     orig_atoms = ase.copy_atoms(atoms)
     while !allGood
         index += 1
         println("E-max", E_max)
-        a_rates = walk_single_walker!(atoms,model,NS.walker_params,E_max,NS.cell_P)
+        passed_test = 0
+        a_rates = Dict("volume" => [0,0], "shear" => [0,0], "stretch" => [0,0], "atoms" => [0,0])
+        @threads for chosen_set in chosen_sets
+            atoms = ase.copy_atoms(NS.walkers[chosen_set])
+            a_rate = walk_single_walker_multithread!(atoms,model,NS.walker_params,E_max,NS.cell_P)
+            for key in keys(a_rates)
+                a_rates[key][1] += a_rate[key][1]
+                a_rates[key][2] += a_rate[key][2]
+                
+            end
+        end
         display(a_rates)
-        display(NS.walker_params)
         rates_good = []
         for key in keys(a_rates)
             rate = a_rates[key][2]/a_rates[key][1]
             push!(rates_good,adjust_step_sizes!(NS.walker_params,key,rate))
-
         end
-        println("rates good")
         println(rates_good)
         allGood =  all(rates_good)
-        ##println(allGood)
-        atoms = ase.copy_atoms(orig_atoms)
-#        atoms = deepcopy(orig_atoms)
+        #a_rates = walk_single_walker!(atoms,model,NS.walker_params,E_max,NS.cell_P)
+        #display(a_rates)
+        # display(NS.walker_params)
+        # rates_good = []
+        # for key in keys(a_rates)
+        #     rate = a_rates[key][2]/a_rates[key][1]
+        #     push!(rates_good,adjust_step_sizes!(NS.walker_params,key,rate))
+        # end
+        # println(rates_good)
+        # allGood =  all(rates_good)
+        
         if index > 2000
             error("Taking too long")
         end
+        # if a_rates["volume"][2] == 0 && a_rates["shear"][2] == 0 && a_rates["stretch"][2] == 0 && a_rates["atoms"][2] == 0
+        #     error("0s in the walker_params")
+        # end
     end
       
 
@@ -269,14 +289,20 @@ function run_NS(NS::NS,LJ::LennardJones.model)
             println("Done with tune up------------------------------------------------->")
         end
         for replace_walker in forDelete
-            #Copy one of the configs that didn't get thrown out as the starting point
-#            NS.walkers[replace_walker] = deepcopy(NS.walkers[sample(keeps,1)[1]])  # ~ 50 allocations
-            NS.walkers[replace_walker] = ase.copy_atoms(NS.walkers[sample(keeps,1)[1]])  # ~ 50 allocations
-            #println("E-max for this walker: ", E_max)
-            #println("Starting energy of this walker: (should be lower than E-max)", ase.eval_energy(NS.walkers[replace_walker],LJ))
-            walk_single_walker!(NS.walkers[replace_walker],LJ,NS.walker_params,E_max,NS.cell_P)
-            #println("Ending energy of this walker: (should be lower than E-max)", ase.eval_energy(NS.walkers[replace_walker],LJ))
+            ###############################MULTITHREADING##########################
+            NS.walkers[replace_walker] = ase.copy_atoms(NS.walkers[sample(keeps,1)[1]])
+            #walk_single_walker!(NS.walkers[replace_walker],LJ,NS.walker_params,E_max,NS.cell_P)
+            extra_walkers = sample(keeps,nthreads()-1, replace=false)
+            chosen_walkers = vcat(extra_walkers,replace_walker)
+            
+            @threads for chosen_walker in chosen_walkers
+                walk_single_walker_multithread!(NS.walkers[chosen_walker],LJ,NS.walker_params,E_max,NS.cell_P)
+            end
+            
         end
+        
+        
+        
         i += 1
         V = ((NS.n_walkers - NS.n_cull + 1)/(NS.n_walkers + 1))^i
         write(io,string(V) * " ")
@@ -295,7 +321,6 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
     volume_cutoff = atoms_cutoff + walk_params.n_cell_volume_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     shear_cutoff = volume_cutoff + walk_params.n_cell_shear_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     stretch_cutoff = shear_cutoff + walk_params.n_cell_stretch_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
-
     typeLookup = Dict( 1 => "atoms", 2=>"volume",3=>"shear",4=>"stretch")
     acceptance_rates = Dict{String,Tuple{Int64,Int64}}("stretch"=>(0,0),"shear"=>(0,0),"volume"=>(0,0), "atoms"=>(0,0))
     for iWalk in 1:walk_params.n_single_walker_steps
@@ -304,16 +329,6 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
         # Select a random move based on the provided weightings
 
         rand_move = rand()
-
-        before_energy = ase.eval_energy(atoms,model,P = cell_P)
-
-        if before_energy > E_max
-            println("Energy before move is greater than E_max")
-            println("iWalk = $iWalk")
-            println(before_energy)
-            println(E_max)
-            error("Failsafe: energy went above E_max!")
-        end
         
         if rand_move < atoms_cutoff
             move = 1
@@ -331,19 +346,52 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
             error("Don't know which kind of move to do?")
         end
 
+        acceptance_rates[typeLookup[move]] = (acceptance_rates[typeLookup[move]][1] + tried, acceptance_rates[typeLookup[move]][2] + accepted)
+        if idx > 10000
+            error("Too long.. Stopping")
+        end
+    end
+    
+    return acceptance_rates
+end
 
-            #        tried,accepted = possible[move](atoms,model,walk_params,E_max)
-        #if idx == 200
-        #    println("atomscount = $atomsCount")
-        #    return nothing
-        #end
-#        after_energy = ase.eval_energy(atoms,model)
-#        if after_energy > E_max
-#            println("iWalk = $iWalk")
-#            println(after_energy)
-#            println(E_max)
-#            error("Failsafe: energy went aboveThis should not have happened!!!")
-#        end
+function walk_single_walker_multithread!(atoms::ase.atoms, model, walk_params::NS_walker_params,E_max,cell_P)
+    idx = 0
+
+    atoms_cutoff =  walk_params.n_atom_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
+    volume_cutoff = atoms_cutoff + walk_params.n_cell_volume_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
+    shear_cutoff = volume_cutoff + walk_params.n_cell_shear_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
+    stretch_cutoff = shear_cutoff + walk_params.n_cell_stretch_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
+    
+    numWalks = ceil(walk_params.n_single_walker_steps/nthreads())
+    if numWalks < 20
+        numWalks = 20
+    end
+    typeLookup = Dict( 1 => "atoms", 2=>"volume",3=>"shear",4=>"stretch")
+    acceptance_rates = Dict{String,Tuple{Int64,Int64}}("stretch"=>(0,0),"shear"=>(0,0),"volume"=>(0,0), "atoms"=>(0,0))
+    for iWalk in 1:numWalks#walk_params.n_single_walker_steps
+        idx += 1
+ 
+        # Select a random move based on the provided weightings
+
+        rand_move = rand()
+        
+        if rand_move < atoms_cutoff
+            move = 1
+            tried,accepted = do_atoms_step(atoms,model,walk_params,E_max,cell_P)
+        elseif rand_move < volume_cutoff
+            move = 2
+            tried,accepted = do_cell_volume_step(atoms,model,walk_params,E_max,cell_P)
+        elseif rand_move < shear_cutoff
+            move = 3
+            tried,accepted = do_cell_shear_step(atoms,model,walk_params,E_max,cell_P)
+        elseif rand_move < stretch_cutoff
+            move = 4
+            tried,accepted = do_cell_stretch_step(atoms,model,walk_params,E_max,cell_P)
+        else
+            error("Don't know which kind of move to do?")
+        end
+
         acceptance_rates[typeLookup[move]] = (acceptance_rates[typeLookup[move]][1] + tried, acceptance_rates[typeLookup[move]][2] + accepted)
         if idx > 10000
             error("Too long.. Stopping")
@@ -351,6 +399,7 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
     end
     return acceptance_rates
 end
+
 
 function do_atoms_step(atoms::ase.atoms, model,walk_params,E_max,cell_P) #atoms::ase.atoms, model,walk_params,E_max)
 

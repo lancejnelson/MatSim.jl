@@ -7,17 +7,18 @@ using LennardJones
 using BenchmarkTools
 using YAML
 using nSampling
+using Base.Threads
 # Load data in to test
 resultsPath = joinpath(cDir,"draws-LJ.Pt-Ag")
 input = YAML.load_file(joinpath(cDir,"NS.yml"))
 LJ_average = LennardJones.get_LJ_averages(resultsPath)
 myNS = nSampling.initialize(input["params"],LJ_average);# 10k allocations.  Need to optimize this.
 nSampling.tune_step_sizes!(myNS,LJ_average)
-nSampling.run_NS(myNS,LJ_average)
-
+@time nSampling.run_NS(myNS,LJ_average)
+println(nthreads())
 
 # Disregard all below
-
+#=
 display(ase.eval_KE(myNS.walkers[sEnergies[end-3]]))
 println(myNS.walkers[sEnergies[end-3]].coordSys)
 myNS.walkers[4].lj_vec
@@ -66,3 +67,4 @@ nSampling.run_NS(myNS,LJ_average)
 rands = nSampling.get_random_displacements([2,3])
 
 println(rands[2])
+=#
