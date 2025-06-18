@@ -3,14 +3,14 @@ params:
   n_Atoms: [5, 3]
   min_atom_separation: 1.5
   n_walkers: 200 # Number of walkers in the pool.
-  n_cull: 16  # Number of walkers to remove at each iteration.
+  n_cull: 1  # Number of walkers to remove at each iteration.
   atom_traj_length: 8 # Length of random walk.
-  eps: 1e-8 # Algorithm stopping criteria
+  eps: 1e-50 # Algorithm stopping criteria
   n_iter: 2000  # Number of NS iterations per walker.
   atom_algorithm: MD # GMC,MC, MD 
   MC_atom_step_size: 0.0005  # Displacements of atoms in GMC as a multiple of max length between atoms (max_vol_per_atom * n_atoms)^(1/3))
   MD_time_step: 5.0e-5
-  n_single_walker_steps: 320  # Number of steps that a single walker should take (long enough to decorrelate)  
+  n_single_walker_steps: 360  # Number of steps that a single walker should take (long enough to decorrelate)  
   n_atom_steps: 10
   n_cell_volume_steps: 5
   n_cell_shear_steps: 8

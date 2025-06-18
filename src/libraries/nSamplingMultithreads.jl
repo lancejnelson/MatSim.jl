@@ -1,4 +1,4 @@
-module nSampling
+module nSamplingMultithreads
 
 using ase
 using LennardJones
@@ -8,7 +8,7 @@ using LinearAlgebra
 using Distributions
 using Random
 using TimerOutputs
-
+using Base.Threads
 
 mutable struct NS_walker_params
     n_single_walker_steps:: Int64
@@ -178,32 +178,43 @@ function tune_step_sizes!(NS,model::LennardJones.model)
     keeps = sEnergies[NS.n_cull + 1: end]
     E_max = NS.walkers[sEnergies[1]].energies[2]
     atoms = ase.copy_atoms(NS.walkers[sample(keeps,1)[1]])
-#    atoms = deepcopy(NS.walkers[sample(keeps,1)[1]])
+
    
     allGood = false
     index = 0
-#    orig_atoms = deepcopy(atoms)
-    orig_atoms = ase.copy_atoms(atoms)
+    chosen_sets = sample(keeps,nthreads(), replace=false)
+    
+    
+    #orig_atoms = ase.copy_atoms(atoms)
     while !allGood
         index += 1
         println("E-max", E_max)
-        a_rates = walk_single_walker!(atoms,model,NS.walker_params,E_max,NS.cell_P)
+        #passed_test = 0
+        a_rates = Dict("volume" => [0,0], "shear" => [0,0], "stretch" => [0,0], "atoms" => [0,0])
+        @threads for chosen_set in chosen_sets
+            atoms = ase.copy_atoms(NS.walkers[chosen_set])
+            div = nthreads()
+            a_rate = walk_single_walker_multithread!(atoms,model,NS.walker_params,E_max,NS.cell_P,div)
+            for key in keys(a_rates)
+                a_rates[key][1] += a_rate[key][1]
+                a_rates[key][2] += a_rate[key][2]
+                
+            end
+        end
         display(a_rates)
-        display(NS.walker_params)
         rates_good = []
         for key in keys(a_rates)
             rate = a_rates[key][2]/a_rates[key][1]
             push!(rates_good,adjust_step_sizes!(NS.walker_params,key,rate))
-
         end
-        println("rates good")
         println(rates_good)
         allGood =  all(rates_good)
-        ##println(allGood)
-        atoms = ase.copy_atoms(orig_atoms)
-#        atoms = deepcopy(orig_atoms)
+        
         if index > 2000
             error("Taking too long")
+        end
+        if a_rates["volume"][2] == 0 && a_rates["shear"][2] == 0 && a_rates["stretch"][2] == 0 && a_rates["atoms"][2] == 0
+            error("0s in the walker_params")
         end
     end
       
@@ -220,10 +231,9 @@ function reverse_sort_energies(NS)
 
     sortperm!(perms,energies)
     return perms
-#    return reverse(perms)
-        
 
 end
+
 
 function run_NS(NS::NS,LJ::LennardJones.model)
 
@@ -237,8 +247,9 @@ function run_NS(NS::NS,LJ::LennardJones.model)
     write(io, "N_steps_per_walker = " * string(NS.n_iter) * "\n")
     write(io, "eps = " * string(NS.eps) * "\n")
     perms = zeros(MVector{length(NS.walkers),Int})
+    notGood = false
+    
     while V > NS.eps
-#    for i= 1:100
         println(i)
         println("V = ", V)
         ## Find the top Kr highest energies
@@ -258,7 +269,7 @@ function run_NS(NS::NS,LJ::LennardJones.model)
         println("KE (lowest energy cull): ", ase.eval_KE(NS.walkers[perms[NS.n_cull]]))
         println("Total (lowest energy cull): ", ase.eval_energy(NS.walkers[perms[NS.n_cull]],LJ,P= NS.cell_P))
 
-        if i %12 == 0  # 12 is pretty arbitrary.. Need a better way to see if need to re-tune
+        if notGood#i %12 == 0  # 12 is pretty arbitrary.. Need a better way to see if need to re-tune
             println("Stopping to retune step sizes")
             energies_before = [ase.eval_energy(walker, LJ, P = NS.cell_P) for walker in NS.walkers]
             tune_step_sizes!(NS,LJ)
@@ -267,18 +278,48 @@ function run_NS(NS::NS,LJ::LennardJones.model)
                 error("Failsafe: tune_step_sizes caused at least one configuration to change")
             end
             println("Done with tune up------------------------------------------------->")
+            notGood = false
         end
+        ###############################MULTITHREADING##########################
+        a_rates = Dict("volume" => [0,0], "shear" => [0,0], "stretch" => [0,0], "atoms" => [0,0])
         for replace_walker in forDelete
-            #Copy one of the configs that didn't get thrown out as the starting point
-#            NS.walkers[replace_walker] = deepcopy(NS.walkers[sample(keeps,1)[1]])  # ~ 50 allocations
-            NS.walkers[replace_walker] = ase.copy_atoms(NS.walkers[sample(keeps,1)[1]])  # ~ 50 allocations
-            #println("E-max for this walker: ", E_max)
-            #println("Starting energy of this walker: (should be lower than E-max)", ase.eval_energy(NS.walkers[replace_walker],LJ))
-            walk_single_walker!(NS.walkers[replace_walker],LJ,NS.walker_params,E_max,NS.cell_P)
-            #println("Ending energy of this walker: (should be lower than E-max)", ase.eval_energy(NS.walkers[replace_walker],LJ))
+            NS.walkers[replace_walker] = ase.copy_atoms(NS.walkers[sample(keeps,1)[1]])
+        end   
+        np = nthreads()
+        if  ceil(NS.walker_params.n_single_walker_steps/np) < 20
+            error("not all threads are being used")
+            np = floor(NS.walker_params.n_single_walker_steps/20)
+        end   
+        if length(forDelete) > np
+            error("inefficient number of threads")
+        elseif length(forDelete) == np
+            chosen_walkers = forDelete
+        else
+            extra_walkers = sample(keeps,np-length(forDelete), replace=false)
+            chosen_walkers = vcat(extra_walkers,forDelete)
+        end  
+        
+        
+        @threads for chosen_walker in chosen_walkers
+            a_rate = walk_single_walker_multithread!(NS.walkers[chosen_walker],LJ,NS.walker_params,E_max,NS.cell_P,length(chosen_walkers))
+            for key in keys(a_rates)
+                a_rates[key][1] += a_rate[key][1]
+                a_rates[key][2] += a_rate[key][2]
+            end
         end
+        for key in keys(a_rates)
+            rate = a_rates[key][2]/a_rates[key][1]
+            if rate <= 1/4 || rate >= 4/8
+                notGood = true
+            end
+            adjust_step_sizes!(NS.walker_params,key,rate)
+        end
+   
+        
+            
         i += 1
         V = ((NS.n_walkers - NS.n_cull + 1)/(NS.n_walkers + 1))^i
+        #V = ((NS.n_walkers - 1 + 1)/(NS.n_walkers + 1))^i
         write(io,string(V) * " ")
         write(io,string(E_max) * " \n")
 
@@ -288,32 +329,26 @@ function run_NS(NS::NS,LJ::LennardJones.model)
 end
 
 
-function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_params,E_max,cell_P)
+function walk_single_walker_multithread!(atoms::ase.atoms, model, walk_params::NS_walker_params,E_max,cell_P,div)
     idx = 0
 
     atoms_cutoff =  walk_params.n_atom_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     volume_cutoff = atoms_cutoff + walk_params.n_cell_volume_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     shear_cutoff = volume_cutoff + walk_params.n_cell_shear_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
     stretch_cutoff = shear_cutoff + walk_params.n_cell_stretch_steps/(walk_params.n_atom_steps + walk_params.n_cell_volume_steps + walk_params.n_cell_shear_steps + walk_params.n_cell_stretch_steps)
+    numWalks = ceil(walk_params.n_single_walker_steps/div)
 
+    if numWalks < 20
+        numWalks = 20
+    end
     typeLookup = Dict( 1 => "atoms", 2=>"volume",3=>"shear",4=>"stretch")
     acceptance_rates = Dict{String,Tuple{Int64,Int64}}("stretch"=>(0,0),"shear"=>(0,0),"volume"=>(0,0), "atoms"=>(0,0))
-    for iWalk in 1:walk_params.n_single_walker_steps
+    for iWalk in 1:numWalks#walk_params.n_single_walker_steps
         idx += 1
  
         # Select a random move based on the provided weightings
 
         rand_move = rand()
-
-        before_energy = ase.eval_energy(atoms,model,P = cell_P)
-
-        if before_energy > E_max
-            println("Energy before move is greater than E_max")
-            println("iWalk = $iWalk")
-            println(before_energy)
-            println(E_max)
-            error("Failsafe: energy went above E_max!")
-        end
         
         if rand_move < atoms_cutoff
             move = 1
@@ -331,19 +366,6 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
             error("Don't know which kind of move to do?")
         end
 
-
-            #        tried,accepted = possible[move](atoms,model,walk_params,E_max)
-        #if idx == 200
-        #    println("atomscount = $atomsCount")
-        #    return nothing
-        #end
-#        after_energy = ase.eval_energy(atoms,model)
-#        if after_energy > E_max
-#            println("iWalk = $iWalk")
-#            println(after_energy)
-#            println(E_max)
-#            error("Failsafe: energy went aboveThis should not have happened!!!")
-#        end
         acceptance_rates[typeLookup[move]] = (acceptance_rates[typeLookup[move]][1] + tried, acceptance_rates[typeLookup[move]][2] + accepted)
         if idx > 10000
             error("Too long.. Stopping")
@@ -351,6 +373,7 @@ function walk_single_walker!(atoms::ase.atoms, model, walk_params::NS_walker_par
     end
     return acceptance_rates
 end
+
 
 function do_atoms_step(atoms::ase.atoms, model,walk_params,E_max,cell_P) #atoms::ase.atoms, model,walk_params,E_max)
 
@@ -385,7 +408,6 @@ end
 
 
 function do_cell_volume_step(atoms::ase.atoms, model,walk_params,E_max,cell_P;execute=true,check_energy = true)
-#    println("Doing cell volume")
     (p,T) = propose_volume_step(atoms,walk_params.volume_step_size)
     
     if do_cell_step!(atoms,p,T,E_max,walk_params,model,cell_P,execute = execute,check_energy=check_energy)

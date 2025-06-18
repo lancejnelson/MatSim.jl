@@ -8,14 +8,27 @@ using BenchmarkTools
 using YAML
 using nSampling
 using Base.Threads
+using Plots
+using DataFrames
+using DelimitedFiles
+using nSamplingMultithreads
+
+
+
+
+
 # Load data in to test
 resultsPath = joinpath(cDir,"draws-LJ.Pt-Ag")
 input = YAML.load_file(joinpath(cDir,"NS.yml"))
 LJ_average = LennardJones.get_LJ_averages(resultsPath)
-myNS = nSampling.initialize(input["params"],LJ_average);# 10k allocations.  Need to optimize this.
-nSampling.tune_step_sizes!(myNS,LJ_average)
-@time nSampling.run_NS(myNS,LJ_average)
-println(nthreads())
+myNS = nSamplingMultithreads.initialize(input["params"],LJ_average);# 10k allocations.  Need to optimize this.
+nSamplingMultithreads.tune_step_sizes!(myNS,LJ_average)
+@time nSamplingMultithreads.run_NS(myNS,LJ_average)
+
+data = readdlm("NS.out")
+energy = data[5:end, 2]
+plot(energy,title="Min Energy: $(energy[end])", xlabel="Iterations", ylabel="Energy")
+savefig("Energy_by_Iteration.png")
 
 # Disregard all below
 #=
