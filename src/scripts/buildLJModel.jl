@@ -1,4 +1,5 @@
-cd("/Users/legoses/OneDrive - BYU-Idaho/codes/MatSim/src/libraries/")
+# cd("/Users/legoses/OneDrive - BYU-Idaho/codes/MatSim/src/libraries/")
+cd("/Users/jerem/Code/Computation Material Science/MatSim.jl/src/libraries")
 push!(LOAD_PATH,pwd())
 
 
@@ -9,7 +10,7 @@ using enumeration
 using LennardJones
 using PlotsMH
 using nSampling
-using StillingerWeber
+#using StillingerWeber
 using DataSets
 using vaspUtils
 

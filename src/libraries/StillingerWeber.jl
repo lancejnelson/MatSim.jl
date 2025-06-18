@@ -1,6 +1,7 @@
 module StillingerWeber
 
-include("/Users/legoses/OneDrive - BYU-Idaho/codes/Crystal.jl")
+#include("/Users/legoses/OneDrive - BYU-Idaho/codes/Crystal.jl")
+#include("/Users/jerem/Code/Computation Material Science/MatSim.jl/src/libraries/ase.jl")
 using .CrystalMethods
 
 

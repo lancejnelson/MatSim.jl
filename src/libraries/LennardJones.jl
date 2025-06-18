@@ -1,5 +1,4 @@
 module LennardJones
-
 using Distributions
 #using StaticArrays
 using Printf
