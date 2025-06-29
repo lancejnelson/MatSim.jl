@@ -1,6 +1,6 @@
 
 params:
-  n_Atoms: [12, 20]
+  n_Atoms: [40, 40]
   min_atom_separation: 1.5
   n_walkers: 200 # Number of walkers in the pool.
   n_cull: 1  # Number of walkers to remove at each iteration.
@@ -16,10 +16,10 @@ params:
   n_cell_volume_steps: 5
   n_cell_shear_steps: 8
   n_cell_stretch_steps: 8
-  cell_P: 0.62  # Atmospheric Pressure in units of eVs / A^3
+  cell_P: 1.20e-6 # Atmospheric Pressure in units of eVs / A^3
   min_aspect_ratio: 0.8
   max_volume_per_atom: 64.0
   volume_step_size: 0.5  # Actually volume per atom step size.
   shear_step_size: 0.2
   stretch_step_size: 0.1
-output: "NS1.out"
+output: "NS-out/NS-10.out"

@@ -226,8 +226,8 @@ function reverse_sort_energies(NS)
 
 end
 
-function run_NS(NS::NS,LJ::LennardJones.model)
-
+function run_NS(NS::NS,LJ::LennardJones.model, output_file)
+    println("Reading the file")
     V = (NS.n_walkers - NS.n_cull + 1)/(NS.n_walkers + 1)
     cDir = pwd()
 
@@ -235,7 +235,7 @@ function run_NS(NS::NS,LJ::LennardJones.model)
 
 
     i = 1
-    io = open(joinpath(cDir,"NS.out"),"w")
+    io = open(joinpath(cDir, output_file),"w")
     write(io, "N_walkers = " * string(NS.n_walkers) * "\n")
     write(io, "N_cull = " * string(NS.n_cull) * "\n")
     write(io, "N_steps_per_walker = " * string(NS.n_iter) * "\n")
@@ -300,7 +300,6 @@ function run_NS(NS::NS,LJ::LennardJones.model)
         write(io,string(E_max) * " \n")
         global E_max_previous = E_max # Save previous E_max for calculating temperature
     end
-
     close(io)
 end
 
